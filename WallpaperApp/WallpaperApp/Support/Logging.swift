@@ -13,4 +13,6 @@ enum Log {
     static let persistence = Logger(subsystem: subsystem, category: "persistence")
     static let policy = Logger(subsystem: subsystem, category: "policy")
     static let diagnostics = Logger(subsystem: subsystem, category: "diagnostics")
+    static let startup = Logger(subsystem: subsystem, category: "startup")
+    static let distribution = Logger(subsystem: subsystem, category: "distribution")
 }

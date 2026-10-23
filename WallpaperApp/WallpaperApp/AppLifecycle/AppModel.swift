@@ -27,6 +27,8 @@ final class AppModel {
     let playback = PlaybackEngine()
     let wallpaper = WallpaperSurfaceController()
     let performanceMonitor = PerformanceMonitor()
+    let launchAtLogin = LaunchAtLoginController()
+    let distributionInfo: DistributionInfo
 
     private let resourcePolicyMonitor = ResourcePolicyMonitor()
     private(set) var resourceConditions = ResourceConditions()
@@ -65,12 +67,14 @@ final class AppModel {
         settings = settingsStore.load()
         displays = coordinator.currentDisplays()
         diagnostics = AppDiagnostics.snapshot()
+        distributionInfo = DistributionInfo.snapshot()
 
         if let issue = settings.wallpaper.restoreIssue {
             missingWallpaper = MissingWallpaper(issue: issue)
         }
 
         playback.apply(settings.playback)
+        reconcileLaunchAtLogin()
 
         coordinator.onChange = { [weak self] displays in
             self?.handleDisplayConfigurationChange(displays)
@@ -124,6 +128,14 @@ final class AppModel {
     var isWallpaperPlaying: Bool { wallpaper.isActive && !wallpaper.isPaused }
     var effectiveIsPlaying: Bool { wallpaper.isActive ? isWallpaperPlaying : isPlaying }
     var displayMode: DisplayMode { settings.displayMode }
+
+    var isLaunchAtLoginEnabled: Bool { launchAtLogin.isEnabled }
+    var launchAtLoginState: LaunchAtLoginController.Status { launchAtLogin.status }
+    var launchAtLoginStatus: String { launchAtLogin.status.summary }
+    var launchAtLoginDetail: String { launchAtLogin.statusDescription }
+    var launchAtLoginError: String? { launchAtLogin.lastError }
+    var launchAtLoginRequiresApproval: Bool { launchAtLogin.requiresApproval }
+    var activeSecurityScopedResourceCount: Int { mediaCache.count }
 
     var isWaitingForDisplay: Bool {
         settings.wallpaper.active != nil
@@ -463,6 +475,19 @@ final class AppModel {
         settings.playback.isMuted.toggle()
     }
 
+    func setLaunchAtLogin(_ enabled: Bool) {
+        guard launchAtLogin.setEnabled(enabled) else { return }
+        settings.launchAtLogin = launchAtLogin.isEnabled
+    }
+
+    func refreshLaunchAtLoginStatus() {
+        launchAtLogin.refresh()
+    }
+
+    func openLoginItemsSettings() {
+        launchAtLogin.openLoginItemsSettings()
+    }
+
     func toggleEffectivePlayback() {
         if wallpaper.isActive {
             wallpaper.togglePlayback()
@@ -707,6 +732,8 @@ final class AppModel {
         displayMode=\(settings.displayMode.rawValue)
         displayConfigurations=\(settings.displayConfigurations.count)
         recentMedia=\(settings.recentMedia.count)
+        securityScopedResources=\(activeSecurityScopedResourceCount)
+        launchAtLogin=\(settings.launchAtLogin) status=\(launchAtLogin.status.summary)
         """
 
         performanceMonitor.sampleNow()
@@ -718,6 +745,8 @@ final class AppModel {
 
         let report = """
         \(diagnostics.report)
+        Distribution:
+        \(distributionInfo.report)
         Displays:
         \(displaySummary.isEmpty ? "none" : displaySummary)
         Disconnected display configurations:
@@ -743,6 +772,22 @@ final class AppModel {
         pasteboard.clearContents()
         pasteboard.setString(report, forType: .string)
         Log.diagnostics.notice("Copied diagnostics report")
+    }
+
+    private func reconcileLaunchAtLogin() {
+        launchAtLogin.refresh()
+
+        if settings.launchAtLogin && !launchAtLogin.isEnabled {
+            if !launchAtLogin.setEnabled(true) {
+                settings.launchAtLogin = false
+            }
+        } else if !settings.launchAtLogin && launchAtLogin.isEnabled {
+            settings.launchAtLogin = true
+        }
+
+        Log.startup.info(
+            "Launch at login preference=\(self.settings.launchAtLogin, privacy: .public) status=\(self.launchAtLogin.status.summary, privacy: .public)"
+        )
     }
 
     private func reapplyResourcePolicy() {

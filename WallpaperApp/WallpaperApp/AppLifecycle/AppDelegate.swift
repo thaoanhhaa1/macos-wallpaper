@@ -9,6 +9,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Log.app.notice(
             "Launched \(diagnostics.appName, privacy: .public) version=\(diagnostics.version, privacy: .public) build=\(diagnostics.build, privacy: .public) os=\(diagnostics.osVersion, privacy: .public)"
         )
+        let distribution = DistributionInfo.snapshot()
+        Log.distribution.notice(
+            "Signature=\(distribution.signatureSummary, privacy: .public) hardenedRuntime=\(distribution.hardenedRuntimeSummary, privacy: .public) sandbox=\(distribution.sandboxSummary, privacy: .public)"
+        )
         Log.app.info("Menu bar shell ready; Settings is available from the menu bar item")
     }
 

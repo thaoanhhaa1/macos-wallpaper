@@ -52,6 +52,7 @@ struct SettingsView: View {
         ) {
             MediaCard(model: model)
             WallpaperCard(model: model)
+            StartupCard(model: model)
             RecentVideosCard(model: model)
             developmentSection
             diagnosticsSection
@@ -112,7 +113,7 @@ struct SettingsView: View {
 
             Spacer(minLength: 12)
 
-            badge("PHASE 7")
+            badge("PHASE 8")
         }
     }
 
@@ -220,7 +221,7 @@ struct SettingsView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
-            Text("Phase 7: grouped settings, keyboard-friendly native controls, drag-and-drop, recent videos, scaling previews and clearer permission/format messages.")
+            Text("Phase 8: launch at login, distribution diagnostics, privacy manifest and a signed/notarized release workflow.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

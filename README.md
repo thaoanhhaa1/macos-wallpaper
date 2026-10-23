@@ -3,7 +3,7 @@
 Ứng dụng macOS native dùng video làm hình nền động. Repo hiện có hai phần:
 
 - `WallpaperSpike/` — feasibility spike của Pha 0.
-- `WallpaperApp/` — ứng dụng thật, hiện hoàn thành Pha 1, Pha 2, Pha 3, Pha 4, Pha 5, Pha 6 và Pha 7.
+- `WallpaperApp/` — ứng dụng thật, hiện hoàn thành Pha 1 đến Pha 8.
 
 Quyết định kỹ thuật và bảng compatibility nằm trong [`FEASIBILITY.md`](FEASIBILITY.md);
 phạm vi các pha tiếp theo nằm trong [`PLAN.md`](PLAN.md).
@@ -26,9 +26,18 @@ phạm vi các pha tiếp theo nằm trong [`PLAN.md`](PLAN.md).
 App chạy dạng menu bar utility (`LSUIElement = YES`), không có Dock icon. Lần chạy đầu
 tiên sẽ mở Settings một lần; các lần sau mở lại bằng item **Settings…** trên menu bar.
 
-Bundle identifier: `com.local.wallpaperapp`. Signing hiện là ad-hoc
-(`CODE_SIGN_IDENTITY = "-"`), chưa bật App Sandbox hoặc hardened runtime; các phần này
-thuộc Pha 8.
+Bundle identifier: `com.local.wallpaperapp`. Debug dùng ad-hoc signing để phát triển;
+Release bật hardened runtime và được ký bằng Developer ID qua quy trình trong
+[`DISTRIBUTION.md`](DISTRIBUTION.md). App Sandbox tắt cho kênh Developer ID; entitlements
+sandbox đã chuẩn bị trong `WallpaperApp/WallpaperApp-Sandbox.entitlements` cho nhánh
+Mac App Store.
+
+Build và phân phối release:
+
+```bash
+DEVELOPMENT_TEAM=ABCDE12345 ./Scripts/release.sh   # Build/Wallpaper.dmg đã notarize
+./Scripts/verify-release.sh Build/Wallpaper.dmg
+```
 
 ### Phạm vi Phase 2
 
@@ -212,6 +221,47 @@ launch at login.
   đọc được label và trạng thái.
 - Đóng Settings, thao tác desktop icons và cửa sổ ứng dụng khác bình thường.
 
+### Phạm vi Phase 8
+
+- **Launch at login** dùng `SMAppService.mainApp` (Login Items API được Apple hỗ trợ),
+  có đăng ký/hủy đăng ký, đọc lại trạng thái thực tế và xử lý `requiresApproval` bằng
+  nút mở System Settings → General → Login Items.
+- Toggle **Launch Wallpaper at login** nằm trong nhóm **Startup & Distribution** ở tab
+  General; preference được lưu trong `AppSettings.launchAtLogin`.
+- Card **Startup & Distribution** hiển thị chữ ký, team identifier, hardened runtime,
+  App Sandbox và việc app có nằm trong `/Applications` hay không.
+- Diagnostics có thêm trạng thái launch at login, số security-scoped resource đang giữ
+  và thông tin phân phối/chữ ký.
+- Release bật hardened runtime, không inject base entitlements và dùng timestamp khi ký.
+- Đã xác định entitlements App Sandbox tối thiểu cho file access:
+  `app-sandbox`, `files.user-selected.read-only`, `files.bookmarks.app-scope`.
+- `Resources/PrivacyInfo.xcprivacy` khai báo required-reason API `UserDefaults`; app không
+  có telemetry hoặc crash reporting nên không cần privacy policy.
+- Quy trình release Developer ID: build archive, export, notarize + staple app, tạo DMG,
+  notarize + staple DMG, verify Gatekeeper; chi tiết trong
+  [`DISTRIBUTION.md`](DISTRIBUTION.md).
+- DMG có shortcut Applications và file **Uninstall Wallpaper.txt**; hướng dẫn xóa cấu
+  hình/login item nằm trong DMG và `Distribution/Uninstall Wallpaper.txt`.
+
+### Kiểm tra Phase 8 thủ công
+
+- Mở Settings → General: bật **Launch Wallpaper at login**, thoát và đăng nhập lại; app
+  tự mở và trạng thái trong Settings là **On**.
+- Tắt toggle, đăng xuất/đăng nhập lại: app không tự mở; trạng thái là **Off**.
+- Nếu macOS trả về **Waiting for approval**, bấm **Open Login Items…** và duyệt app;
+  mở lại Settings để thấy trạng thái cập nhật.
+- Chạy app từ thư mục ngoài `/Applications`: trạng thái login item có thể là
+  **Unavailable**; chuyển app vào Applications rồi thử lại.
+- Kiểm tra **Copy Diagnostics** có `Distribution`, `launchAtLogin`,
+  `securityScopedResources`, `hardenedRuntime` và `sandbox`.
+- Build Release bằng `DEVELOPMENT_TEAM=... ./Scripts/release.sh` trên máy có chứng chỉ
+  Developer ID; mở DMG trên máy sạch, kéo app vào Applications và mở không bị Gatekeeper
+  chặn.
+- Chạy `./Scripts/verify-release.sh Build/Wallpaper.dmg`: staple hợp lệ và Gatekeeper
+  chấp nhận.
+- Theo hướng dẫn trong DMG để uninstall; kiểm tra app, login item và preference đã được
+  xóa.
+
 ### Kiểm tra playback thủ công
 
 Dùng **Choose Video…** hoặc **Preview Fixture** trong Settings, sau đó kiểm tra:
@@ -228,10 +278,11 @@ Dùng **Choose Video…** hoặc **Preview Fixture** trong Settings, sau đó ki
 ```text
 WallpaperApp/
 ├── WallpaperApp.xcodeproj
+├── WallpaperApp-Sandbox.entitlements  # entitlements cho nhánh Mac App Store
 └── WallpaperApp/
     ├── AppLifecycle/       App entry, AppDelegate, AppModel, trạng thái
     ├── MenuBarFeature/     Menu bar item và menu content
-    ├── SettingsFeature/    Settings window, media card và playback controls
+    ├── SettingsFeature/    Settings window, media card, startup card và playback controls
     ├── MediaLibrary/       MediaReference, validation/import, development fixture
     ├── PlaybackEngine/     Playback state, looping engine và preview layer
     ├── WallpaperSurface/   Surface strategy đã xác minh ở Pha 0
@@ -239,14 +290,19 @@ WallpaperApp/
     ├── Persistence/        AppSettings schema, bookmark resolver và wallpaper state
     ├── ResourcePolicy/     Chính sách tài nguyên theo playback settings
     ├── Diagnostics/        Thông tin version/OS/log subsystem
-    ├── Support/            OSLog subsystem và category
-    └── Resources/          Fixture video cho debug
+    ├── Support/            OSLog, launch at login và distribution info
+    └── Resources/          Fixture video (Debug) và PrivacyInfo.xcprivacy
 ```
+
+Scripts phân phối: `build-release.sh`, `notarize.sh`, `create-dmg.sh`,
+`verify-release.sh`, `release.sh`. Hướng dẫn và quyết định kênh phân phối nằm trong
+[`DISTRIBUTION.md`](DISTRIBUTION.md).
 
 ### Logging
 
 Subsystem: `com.local.wallpaperapp`. Category: `app`, `settings`, `menu-bar`, `media`,
-`playback`, `surface`, `display`, `persistence`, `policy`, `diagnostics`.
+`playback`, `surface`, `display`, `persistence`, `policy`, `diagnostics`, `startup`,
+`distribution`.
 
 Quy ước:
 
@@ -340,11 +396,13 @@ dù window vẫn hiển thị trên màn hình vật lý. Vì vậy:
   overlay (chấp nhận che icons) hoặc giới hạn ở màn hình chính; chi tiết trong
   `FEASIBILITY.md`.
 
-## Chưa nằm trong Phase 0–6
+## Ngoài phạm vi hiện tại
 
-- Launch at login.
-- Signing, sandbox, notarization.
+- Phân phối qua Mac App Store và provisioning profile tương ứng; entitlements sandbox đã
+  chuẩn bị nhưng chưa phải kênh phát hành chính.
 - Automated soak test dài hạn và đo dropped frames trên phần cứng/1080p/4K thực tế.
 - Manual matrix còn lại cho Spaces, Mission Control và một số tổ hợp display/sleep/wake.
+- Telemetry/crash reporting và privacy policy tương ứng (hiện app không thu thập dữ liệu).
 
-Xem `PLAN.md` để biết phạm vi các pha tiếp theo.
+Xem `PLAN.md` để biết phạm vi các pha tiếp theo và `DISTRIBUTION.md` cho quy trình phát
+hành.

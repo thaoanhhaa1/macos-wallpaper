@@ -1,0 +1,11 @@
+Uninstall Wallpaper
+===================
+
+1. Quit Wallpaper from the menu bar item.
+2. Drag WallpaperApp.app from Applications to the Trash.
+3. Open System Settings > General > Login Items and remove Wallpaper if it is listed.
+4. Optional: remove saved settings and security-scoped bookmarks:
+   - Non-sandboxed build: defaults delete com.local.wallpaperapp
+   - Sandboxed build:  rm -rf ~/Library/Containers/com.local.wallpaperapp
+
+Wallpaper does not create files outside its app container or preferences domain.
