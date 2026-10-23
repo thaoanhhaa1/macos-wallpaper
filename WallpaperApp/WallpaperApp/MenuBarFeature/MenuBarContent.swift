@@ -11,12 +11,20 @@ struct MenuBarContent: View {
 
         Divider()
 
-        Button("Play") {}
-            .disabled(true)
-        Button("Pause") {}
-            .disabled(true)
-        Button("Mute") {}
-            .disabled(true)
+        Button(model.isPlaying ? "Pause" : "Play") {
+            model.togglePlayPause()
+        }
+        .disabled(!model.hasMedia)
+
+        Button(model.settings.playback.isMuted ? "Unmute" : "Mute") {
+            model.toggleMute()
+        }
+        .disabled(!model.hasMedia)
+
+        Button("Choose Video…") {
+            Task { await model.chooseVideo() }
+        }
+        .disabled(model.importState == .importing)
 
         Divider()
 

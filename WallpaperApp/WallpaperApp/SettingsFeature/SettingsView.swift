@@ -9,7 +9,7 @@ struct SettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
-                EmptyWallpaperCard()
+                MediaCard(model: model)
                 systemSection
                 developmentSection
                 footer
@@ -40,7 +40,7 @@ struct SettingsView: View {
 
             Spacer()
 
-            badge("PHASE 1")
+            badge("PHASE 2")
         }
     }
 
@@ -104,11 +104,15 @@ struct SettingsView: View {
                         Text(fixture.lastPathComponent)
                             .font(.system(.callout, design: .monospaced))
                             .textSelection(.enabled)
-                        Text("Bundled fixture for debug builds only. Use it for import and playback checks in later phases.")
+                        Text("Bundled fixture for debug builds only. Preview it to exercise validation, loop and cleanup without picking a file.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
+                    Button("Preview Fixture") {
+                        Task { await model.useDevelopmentFixture() }
+                    }
+                    .disabled(model.importState == .importing)
                     Button("Reveal in Finder") {
                         model.revealDevelopmentFixture()
                     }
@@ -135,7 +139,7 @@ struct SettingsView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
-            Text("Phase 1 skeleton: menu bar shell, Settings window and empty state. Import, playback and apply arrive in later phases.")
+            Text("Phase 2: import, validation, preview and looping playback. Applying the video as the desktop wallpaper arrives in Phase 3.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

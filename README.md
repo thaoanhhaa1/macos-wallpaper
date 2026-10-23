@@ -3,7 +3,7 @@
 Ứng dụng macOS native dùng video làm hình nền động. Repo hiện có hai phần:
 
 - `WallpaperSpike/` — feasibility spike của Pha 0.
-- `WallpaperApp/` — skeleton ứng dụng thật của Pha 1.
+- `WallpaperApp/` — ứng dụng thật, hiện hoàn thành Pha 1 và Pha 2.
 
 Quyết định kỹ thuật và bảng compatibility nằm trong [`FEASIBILITY.md`](FEASIBILITY.md);
 phạm vi các pha tiếp theo nằm trong [`PLAN.md`](PLAN.md).
@@ -14,7 +14,7 @@ phạm vi các pha tiếp theo nằm trong [`PLAN.md`](PLAN.md).
 - Xcode 27 / Swift 6 toolchain.
 - Terminal cần quyền **Screen Recording** nếu chạy `Scripts/visibility-check.sh`.
 
-## Ứng dụng Pha 1
+## Ứng dụng
 
 ### Build và chạy
 
@@ -30,19 +30,35 @@ Bundle identifier: `com.local.wallpaperapp`. Signing hiện là ad-hoc
 (`CODE_SIGN_IDENTITY = "-"`), chưa bật App Sandbox hoặc hardened runtime; các phần này
 thuộc Pha 8.
 
-### Phạm vi skeleton
+### Phạm vi Phase 2
 
-- Menu bar shell với trạng thái `No Wallpaper`, Play/Pause/Mute (disabled), Settings,
-  About và Quit.
-- Settings window với empty state, danh sách display hiện tại, surface strategy và
-  thông tin chẩn đoán.
+- Menu bar shell với trạng thái wallpaper, Play/Pause, Mute/Unmute, Choose Video,
+  Settings, About và Quit.
+- Open panel lọc MP4/MOV; validation bất đồng bộ bằng `AVAsset` (playable, video track,
+  duration, kích thước, frame rate, codec, audio).
+- Hiển thị metadata và lỗi có thể hành động cho từng trạng thái import.
+- Preview bằng `AVPlayerLayer` trong Settings.
+- Playback engine dùng `AVQueuePlayer` + `AVPlayerLooper`: play/pause, seek, restart,
+  mute, volume, bật/tắt loop; teardown player, looper và observer khi thay media.
+- Settings window với danh sách display hiện tại, surface strategy và thông tin chẩn đoán.
 - App lifecycle dùng SwiftUI `App` + `AppDelegate`/AppKit integration.
 - Module/folder structure theo kiến trúc trong `PLAN.md`.
 - `OSLog` subsystem và quy ước log.
-- Fixture video nhỏ cho development/test.
+- Fixture video nhỏ cho development/test, xem trực tiếp từ mục Development.
 
-Chưa nằm trong Pha 1: import video, preview, playback, apply/remove wallpaper,
-persistence UI, multi-display configuration, launch at login.
+Chưa nằm trong Phase 2: apply/remove wallpaper surface, persistence của media đã chọn,
+multi-display configuration UI, launch at login.
+
+### Kiểm tra playback thủ công
+
+Dùng **Choose Video…** hoặc **Preview Fixture** trong Settings, sau đó kiểm tra:
+
+- File lớn (vài trăm MB): import không treo UI; preview phát được sau khi validate.
+- File không có audio: preview vẫn phát, nút Mute không gây lỗi.
+- File dài: seek/restart hoạt động, thời lượng hiển thị đúng.
+- Codec không hỗ trợ: card hiển thị lỗi codec và gợi ý dùng H.264/HEVC.
+- Loop bật: video quay vòng không có khoảng đen; Loop tắt: dừng ở cuối và chuyển Paused.
+- Thay media liên tiếp: không có player/observer cũ tiếp tục chạy.
 
 ### Cấu trúc
 
@@ -52,9 +68,9 @@ WallpaperApp/
 └── WallpaperApp/
     ├── AppLifecycle/       App entry, AppDelegate, AppModel, trạng thái
     ├── MenuBarFeature/     Menu bar item và menu content
-    ├── SettingsFeature/    Settings window và empty state
-    ├── MediaLibrary/       MediaReference, development fixture
-    ├── PlaybackEngine/     PlaybackState
+    ├── SettingsFeature/    Settings window, media card và playback controls
+    ├── MediaLibrary/       MediaReference, validation/import, development fixture
+    ├── PlaybackEngine/     Playback state, looping engine và preview layer
     ├── WallpaperSurface/   Surface strategy đã xác minh ở Pha 0
     ├── DisplayCoordinator/ Theo dõi NSScreen và thay đổi display
     ├── Persistence/        AppSettings schema và SettingsStore
@@ -161,11 +177,10 @@ dù window vẫn hiển thị trên màn hình vật lý. Vì vậy:
   overlay (chấp nhận che icons) hoặc giới hạn ở màn hình chính; chi tiết trong
   `FEASIBILITY.md`.
 
-## Chưa nằm trong Phase 0/1
+## Chưa nằm trong Phase 0–2
 
-- Import/validation video và preview.
-- Playback engine và apply/remove wallpaper.
-- Persistence, security-scoped bookmark, launch at login.
+- Apply/remove wallpaper surface và restore last wallpaper.
+- Persistence, security-scoped bookmark khi khôi phục, launch at login.
 - Multi-display configuration UI đầy đủ.
 - Resource policy (pause on fullscreen/battery/sleep tùy chọn).
 - Signing, sandbox, notarization.
