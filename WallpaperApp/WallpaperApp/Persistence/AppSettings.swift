@@ -1,34 +1,52 @@
 import Foundation
 
 struct AppSettings: Codable, Equatable {
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 2
 
     var schemaVersion: Int
     var launchAtLogin: Bool
     var playback: PlaybackSettings
     var displayMode: DisplayMode
+    var wallpaper: PersistedWallpaperState
+    var displayConfigurations: [String: DisplayWallpaperConfiguration]
 
     init(
         schemaVersion: Int = AppSettings.currentSchemaVersion,
         launchAtLogin: Bool = false,
         playback: PlaybackSettings = PlaybackSettings(),
-        displayMode: DisplayMode = .mainScreen
+        displayMode: DisplayMode = .mainScreen,
+        wallpaper: PersistedWallpaperState = PersistedWallpaperState(),
+        displayConfigurations: [String: DisplayWallpaperConfiguration] = [:]
     ) {
         self.schemaVersion = schemaVersion
         self.launchAtLogin = launchAtLogin
         self.playback = playback
         self.displayMode = displayMode
+        self.wallpaper = wallpaper
+        self.displayConfigurations = displayConfigurations
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion)
-            ?? AppSettings.currentSchemaVersion
+            ?? 1
         launchAtLogin = try container.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
         playback = try container.decodeIfPresent(PlaybackSettings.self, forKey: .playback)
             ?? PlaybackSettings()
         displayMode = try container.decodeIfPresent(DisplayMode.self, forKey: .displayMode)
             ?? .mainScreen
+        wallpaper = try container.decodeIfPresent(PersistedWallpaperState.self, forKey: .wallpaper)
+            ?? PersistedWallpaperState()
+        displayConfigurations = try container.decodeIfPresent(
+            [String: DisplayWallpaperConfiguration].self,
+            forKey: .displayConfigurations
+        ) ?? [:]
+    }
+
+    mutating func migrateToCurrentVersion() {
+        if schemaVersion < 2 {
+            schemaVersion = 2
+        }
     }
 }
 

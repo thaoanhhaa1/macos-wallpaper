@@ -39,6 +39,7 @@ final class WallpaperSurfaceController {
     private(set) var surfaceCount = 0
     private(set) var appliedMediaName: String?
     private(set) var isActive = false
+    private(set) var appliedDisplayIDs: [CGDirectDisplayID] = []
 
     @ObservationIgnored private(set) var playback: SurfacePlayback?
     @ObservationIgnored private var windows: [CGDirectDisplayID: WallpaperSurfaceWindow] = [:]
@@ -90,6 +91,7 @@ final class WallpaperSurfaceController {
             teardownWindows()
             isActive = false
             surfaceCount = 0
+            appliedDisplayIDs = []
             state = .failed(error.localizedDescription)
             Log.surface.error(
                 "Failed to apply wallpaper \(displayName, privacy: .public): \(error.localizedDescription, privacy: .public)"
@@ -101,6 +103,7 @@ final class WallpaperSurfaceController {
         appliedMediaName = displayName
         isActive = true
         surfaceCount = windows.count
+        appliedDisplayIDs = Array(windows.keys)
         state = .active
         installObserversIfNeeded()
 
@@ -189,6 +192,7 @@ final class WallpaperSurfaceController {
         do {
             try rebuildWindows(with: player)
             surfaceCount = windows.count
+            appliedDisplayIDs = Array(windows.keys)
             Log.surface.info(
                 "Rebuilt wallpaper surfaces count=\(self.surfaceCount, privacy: .public)"
             )
@@ -257,6 +261,7 @@ final class WallpaperSurfaceController {
         playback = nil
         isActive = false
         surfaceCount = 0
+        appliedDisplayIDs = []
         if resetApplied {
             appliedMediaName = nil
         }

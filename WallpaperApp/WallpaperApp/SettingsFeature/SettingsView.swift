@@ -41,7 +41,7 @@ struct SettingsView: View {
 
             Spacer()
 
-            badge("PHASE 3")
+            badge("PHASE 4")
         }
     }
 
@@ -81,6 +81,14 @@ struct SettingsView: View {
                     Text(model.surfaceStrategy.title)
                 }
                 Text(model.surfaceStrategy.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                LabeledContent("Saved display configurations") {
+                    Text("\(model.persistedDisplayConfigurationCount)")
+                        .font(.system(.caption, design: .monospaced))
+                }
+                Text("Wallpaper assignments are stored as security-scoped bookmarks and restored on launch.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -140,7 +148,7 @@ struct SettingsView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
-            Text("Phase 3: apply, remove and restore a click-through video wallpaper behind desktop icons.")
+            Text("Phase 4: persists the wallpaper bookmark and settings, restores them on launch and offers relinking when the video is missing.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

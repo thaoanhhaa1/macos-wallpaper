@@ -2,6 +2,7 @@ import AppKit
 
 struct DisplayInfo: Identifiable, Hashable {
     let id: CGDirectDisplayID
+    let persistentID: String
     let name: String
     let frame: CGRect
     let visibleFrame: CGRect
@@ -11,6 +12,11 @@ struct DisplayInfo: Identifiable, Hashable {
     init(screen: NSScreen, isMain: Bool) {
         let screenNumberKey = NSDeviceDescriptionKey("NSScreenNumber")
         id = (screen.deviceDescription[screenNumberKey] as? NSNumber)?.uint32Value ?? 0
+        if let uuid = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue() {
+            persistentID = CFUUIDCreateString(nil, uuid) as String
+        } else {
+            persistentID = "display-\(id)"
+        }
         name = screen.localizedName
         frame = screen.frame
         visibleFrame = screen.visibleFrame

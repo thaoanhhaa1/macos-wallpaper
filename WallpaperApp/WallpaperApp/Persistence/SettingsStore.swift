@@ -18,7 +18,15 @@ struct SettingsStore {
         }
 
         do {
-            let settings = try decoder.decode(AppSettings.self, from: data)
+            var settings = try decoder.decode(AppSettings.self, from: data)
+            let loadedVersion = settings.schemaVersion
+            if loadedVersion < AppSettings.currentSchemaVersion {
+                settings.migrateToCurrentVersion()
+                save(settings)
+                Log.persistence.notice(
+                    "Migrated settings schema \(loadedVersion, privacy: .public) -> \(settings.schemaVersion, privacy: .public)"
+                )
+            }
             Log.persistence.info("Loaded settings schema=\(settings.schemaVersion, privacy: .public)")
             return settings
         } catch {

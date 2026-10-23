@@ -8,6 +8,13 @@ struct MediaCard: View {
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
+                if let missing = model.missingWallpaper {
+                    missingState(missing)
+                    if model.hasMedia {
+                        Divider()
+                    }
+                }
+
                 if model.hasMedia {
                     preview
                     details
@@ -17,20 +24,83 @@ struct MediaCard: View {
                     controls
                     Divider()
                     actions
-                } else {
-                    switch model.importState {
-                    case .importing:
-                        importingState
-                    case .failed(let message):
-                        failedState(message)
-                    case .idle:
-                        emptyState
+                } else if model.missingWallpaper == nil {
+                    if model.isRestoringWallpaper {
+                        restoringState
+                    } else {
+                        switch model.importState {
+                        case .importing:
+                            importingState
+                        case .failed(let message):
+                            failedState(message)
+                        case .idle:
+                            emptyState
+                        }
                     }
                 }
             }
             .padding(8)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private func missingState(_ missing: MissingWallpaper) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            Image(systemName: "questionmark.folder.fill")
+                .font(.system(size: 30))
+                .foregroundStyle(.orange)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Wallpaper video missing")
+                    .font(.title3.weight(.semibold))
+                Text(missing.reason)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(spacing: 10) {
+                    Button("Relink…") {
+                        Task { await model.relinkMissingVideo() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.importState == .importing)
+
+                    Button("Forget Wallpaper") {
+                        model.removeWallpaper()
+                    }
+                    .disabled(model.importState == .importing)
+
+                    if model.importState == .importing {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Validating video…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.top, 2)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(8)
+    }
+
+    private var restoringState: some View {
+        HStack(spacing: 16) {
+            ProgressView()
+                .controlSize(.large)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Restoring saved wallpaper…")
+                    .font(.title3.weight(.semibold))
+                Text("Resolving the security-scoped bookmark and validating the saved video.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(8)
+        .frame(minHeight: 120)
     }
 
     private var preview: some View {

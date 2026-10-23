@@ -42,6 +42,7 @@ enum MediaImportError: LocalizedError, Equatable {
     case fileUnreadable
     case notPlayable
     case noVideoTrack
+    case bookmarkCreationFailed(String)
     case loadFailed(String)
 
     var errorDescription: String? {
@@ -54,6 +55,8 @@ enum MediaImportError: LocalizedError, Equatable {
             "This video can't be played. Its codec may be unsupported; try H.264 or HEVC in an MP4 or MOV file."
         case .noVideoTrack:
             "This file doesn't contain a video track."
+        case .bookmarkCreationFailed(let message):
+            "The video can be previewed, but the app couldn't save permission to reopen it later: \(message)"
         case .loadFailed(let message):
             "The video couldn't be read: \(message)"
         }

@@ -26,6 +26,13 @@ struct MenuBarContent: View {
         }
         .disabled(model.importState == .importing)
 
+        if model.missingWallpaper != nil {
+            Button("Relink Missing Video…") {
+                Task { await model.relinkMissingVideo() }
+            }
+            .disabled(model.importState == .importing)
+        }
+
         Divider()
 
         Button("Apply as Wallpaper") {
@@ -39,9 +46,9 @@ struct MenuBarContent: View {
         .disabled(!model.wallpaper.isActive && model.wallpaper.state.failureReason == nil)
 
         Button("Restore Last Wallpaper") {
-            model.restoreLastWallpaper()
+            Task { await model.restoreLastWallpaper() }
         }
-        .disabled(!model.hasLastWallpaper || model.wallpaper.isActive)
+        .disabled(!model.hasLastWallpaper || model.wallpaper.isActive || model.isRestoringWallpaper)
 
         Divider()
 

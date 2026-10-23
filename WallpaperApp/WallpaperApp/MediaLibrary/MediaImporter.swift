@@ -41,11 +41,12 @@ struct MediaImporter {
         Log.media.notice("Validating media \(url.lastPathComponent, privacy: .public)")
         let metadata = try await MediaInspector.inspect(url: url)
 
-        let bookmarkData = (try? url.bookmarkData(
-            options: [.withSecurityScope],
-            includingResourceValuesForKeys: nil,
-            relativeTo: nil
-        )) ?? Data()
+        let bookmarkData: Data
+        do {
+            bookmarkData = try MediaBookmark.makeBookmarkData(for: url)
+        } catch {
+            throw MediaImportError.bookmarkCreationFailed(error.localizedDescription)
+        }
 
         let reference = MediaReference(
             bookmarkData: bookmarkData,
