@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 
 struct DisplayInfo: Identifiable, Hashable {
     let id: CGDirectDisplayID
@@ -8,10 +9,11 @@ struct DisplayInfo: Identifiable, Hashable {
     let visibleFrame: CGRect
     let backingScaleFactor: CGFloat
     let isMain: Bool
+    let isBuiltIn: Bool
+    let mirrorsDisplayID: CGDirectDisplayID?
 
     init(screen: NSScreen, isMain: Bool) {
-        let screenNumberKey = NSDeviceDescriptionKey("NSScreenNumber")
-        id = (screen.deviceDescription[screenNumberKey] as? NSNumber)?.uint32Value ?? 0
+        id = Self.displayID(for: screen)
         if let uuid = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue() {
             persistentID = CFUUIDCreateString(nil, uuid) as String
         } else {
@@ -21,12 +23,29 @@ struct DisplayInfo: Identifiable, Hashable {
         frame = screen.frame
         visibleFrame = screen.visibleFrame
         backingScaleFactor = screen.backingScaleFactor
+        isBuiltIn = CGDisplayIsBuiltin(id) != 0
+        let mirroredDisplayID = CGDisplayMirrorsDisplay(id)
+        mirrorsDisplayID = mirroredDisplayID == 0 ? nil : mirroredDisplayID
         self.isMain = isMain
     }
+
+    var isMirrored: Bool { mirrorsDisplayID != nil }
 
     var summary: String {
         "\(Int(frame.width)) × \(Int(frame.height)) @ \(String(format: "%.1f", backingScaleFactor))×"
     }
+
+    static func displayID(for screen: NSScreen) -> CGDirectDisplayID {
+        let screenNumberKey = NSDeviceDescriptionKey("NSScreenNumber")
+        return (screen.deviceDescription[screenNumberKey] as? NSNumber)?.uint32Value ?? 0
+    }
+}
+
+struct DisconnectedDisplayConfiguration: Identifiable, Equatable {
+    let persistentID: String
+    let configuration: DisplayWallpaperConfiguration
+
+    var id: String { persistentID }
 }
 
 @MainActor
@@ -36,8 +55,12 @@ final class DisplayCoordinator {
     private var screenObserver: NSObjectProtocol?
 
     func currentDisplays() -> [DisplayInfo] {
-        NSScreen.screens.enumerated().map { index, screen in
-            DisplayInfo(screen: screen, isMain: index == 0)
+        let mainDisplayID = NSScreen.main.map(DisplayInfo.displayID(for:))
+        return NSScreen.screens.map { screen in
+            DisplayInfo(
+                screen: screen,
+                isMain: DisplayInfo.displayID(for: screen) == mainDisplayID
+            )
         }
     }
 
@@ -64,7 +87,10 @@ final class DisplayCoordinator {
 
     private func publish() {
         let displays = currentDisplays()
-        Log.display.info("Display configuration changed count=\(displays.count, privacy: .public)")
+        let ids = displays.map(\.persistentID).joined(separator: ",")
+        Log.display.info(
+            "Display configuration changed count=\(displays.count, privacy: .public) ids=\(ids, privacy: .public)"
+        )
         onChange?(displays)
     }
 

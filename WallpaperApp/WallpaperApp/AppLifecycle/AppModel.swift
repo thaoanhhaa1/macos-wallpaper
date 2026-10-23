@@ -16,9 +16,7 @@ final class AppModel {
 
             if oldValue.playback != settings.playback {
                 playback.apply(settings.playback)
-            }
-            if oldValue.playback != settings.playback || oldValue.displayMode != settings.displayMode {
-                wallpaper.update(settings: settings.playback, displayMode: settings.displayMode)
+                wallpaper.update(settings: settings.playback)
             }
 
             Log.settings.info("Settings updated schema=\(self.settings.schemaVersion, privacy: .public)")
@@ -35,13 +33,21 @@ final class AppModel {
     private(set) var displays: [DisplayInfo]
     private(set) var missingWallpaper: MissingWallpaper?
     private(set) var isRestoringWallpaper = false
+    private(set) var selectedDisplayPersistentID: String?
 
     let diagnostics: AppDiagnostics
     var surfaceStrategy: WallpaperSurfaceStrategy { wallpaper.strategy }
 
     @ObservationIgnored private var terminationObserver: NSObjectProtocol?
-    @ObservationIgnored private var activeMediaResource: SecurityScopedMedia?
+    @ObservationIgnored private var mediaCache: [UUID: CachedMedia] = [:]
     @ObservationIgnored private var hasAttemptedStartupRestore = false
+    @ObservationIgnored private var displayReconcileTask: Task<Void, Never>?
+
+    private struct CachedMedia {
+        var reference: MediaReference
+        let url: URL
+        let resource: SecurityScopedMedia
+    }
 
     init(
         settingsStore: SettingsStore = SettingsStore(),
@@ -61,8 +67,7 @@ final class AppModel {
         playback.apply(settings.playback)
 
         coordinator.onChange = { [weak self] displays in
-            self?.displays = displays
-            self?.wallpaper.handleDisplayChange(displayMode: self?.settings.displayMode ?? .mainScreen)
+            self?.handleDisplayConfigurationChange(displays)
         }
         coordinator.start()
 
@@ -74,7 +79,7 @@ final class AppModel {
             MainActor.assumeIsolated {
                 self?.playback.teardown()
                 self?.wallpaper.shutdown()
-                self?.activeMediaResource?.stopAccessing()
+                self?.stopAllMediaResources()
             }
         }
 
@@ -95,6 +100,31 @@ final class AppModel {
     var persistedDisplayConfigurationCount: Int { settings.displayConfigurations.count }
     var isWallpaperPlaying: Bool { wallpaper.isActive && !wallpaper.isPaused }
     var effectiveIsPlaying: Bool { wallpaper.isActive ? isWallpaperPlaying : isPlaying }
+    var displayMode: DisplayMode { settings.displayMode }
+
+    var isWaitingForDisplay: Bool {
+        settings.wallpaper.active != nil
+            && !wallpaper.isActive
+            && !isRestoringWallpaper
+            && missingWallpaper == nil
+            && wallpaper.state.failureReason == nil
+    }
+
+    var targetDisplayPersistentID: String? {
+        if let selectedDisplayPersistentID,
+           displays.contains(where: { $0.persistentID == selectedDisplayPersistentID }) {
+            return selectedDisplayPersistentID
+        }
+        return (displays.first(where: \.isMain) ?? displays.first(where: { !$0.isMirrored }))?.persistentID
+    }
+
+    var disconnectedDisplayConfigurations: [DisconnectedDisplayConfiguration] {
+        let connectedIDs = Set(displays.map(\.persistentID))
+        return settings.displayConfigurations
+            .filter { !connectedIDs.contains($0.key) }
+            .map { DisconnectedDisplayConfiguration(persistentID: $0.key, configuration: $0.value) }
+            .sorted { $0.configuration.displayName < $1.configuration.displayName }
+    }
 
     var status: WallpaperStatus {
         if let missingWallpaper {
@@ -102,6 +132,9 @@ final class AppModel {
         }
         if let failure = wallpaper.state.failureReason {
             return .error(failure)
+        }
+        if isWaitingForDisplay {
+            return .waitingForDisplay
         }
         if wallpaper.isActive {
             return wallpaper.isPaused ? .paused : .playing
@@ -139,6 +172,9 @@ final class AppModel {
         if let failure = wallpaper.state.failureReason {
             return failure
         }
+        if isWaitingForDisplay {
+            return "The saved wallpaper is waiting for a configured display to reconnect."
+        }
         if wallpaper.isActive {
             let count = wallpaper.surfaceCount
             let suffix = count == 1 ? "" : "s"
@@ -158,6 +194,8 @@ final class AppModel {
             return "Your video wallpaper is playing."
         case .paused:
             return "Playback is paused."
+        case .waitingForDisplay:
+            return "The saved wallpaper is waiting for a configured display to reconnect."
         case .error(let message):
             return message
         }
@@ -196,6 +234,7 @@ final class AppModel {
             selectedMediaURL = selection.url
             mediaMetadata = selection.metadata
             importState = .idle
+            stopUnusedMedia(keeping: wallpaper.appliedMediaIdentifiers)
             Log.media.notice(
                 "Import ready for \(selection.reference.displayName, privacy: .public) duration=\(selection.metadata.duration, privacy: .public)"
             )
@@ -234,21 +273,63 @@ final class AppModel {
             selectedMedia = selection.reference
             selectedMediaURL = selection.url
             mediaMetadata = selection.metadata
+            stopUnusedMedia(keeping: wallpaper.appliedMediaIdentifiers)
 
-            let assignment = WallpaperAssignment(
-                media: selection.reference,
-                displayMode: issue.displayMode
-            )
-            try performApply(assignment: assignment, url: selection.url)
+            let media = mediaCache[selection.reference.identifier]?.reference ?? selection.reference
+            let previous = settings
 
-            settings.wallpaper.active = assignment
-            settings.wallpaper.last = assignment
-            settings.wallpaper.restoreIssue = nil
-            missingWallpaper = nil
-            importState = .idle
-            Log.persistence.notice(
-                "Relinked wallpaper \(assignment.media.displayName, privacy: .public)"
-            )
+            do {
+                if let displayPersistentID = issue.displayPersistentID {
+                    let displayName = issue.targetDisplayName
+                        ?? displays.first(where: { $0.persistentID == displayPersistentID })?.name
+                        ?? "Display"
+                    let assignment = WallpaperAssignment(media: media, displayMode: .perDisplay)
+                    settings.displayMode = .perDisplay
+                    settings.displayConfigurations[displayPersistentID] = DisplayWallpaperConfiguration(
+                        displayName: displayName,
+                        assignment: assignment
+                    )
+                    settings.wallpaper.active = assignment
+                    settings.wallpaper.last = assignment
+                    settings.wallpaper.restoreIssue = nil
+                    missingWallpaper = nil
+
+                    try await restorePerDisplay(
+                        assignment: assignment,
+                        reason: "Relink display"
+                    )
+                } else {
+                    let assignment = WallpaperAssignment(
+                        media: media,
+                        displayMode: issue.displayMode
+                    )
+                    settings.displayMode = issue.displayMode
+                    let assignments = desiredAssignments(
+                        for: issue.displayMode,
+                        using: assignment.media
+                    )
+                    guard !assignments.isEmpty else {
+                        throw WallpaperSurfaceError.noDisplay
+                    }
+                    try applyAssignments(
+                        assignments,
+                        mode: issue.displayMode,
+                        reason: "Relink"
+                    )
+                    settings.wallpaper.active = assignment
+                    settings.wallpaper.last = assignment
+                    settings.wallpaper.restoreIssue = nil
+                    missingWallpaper = nil
+                }
+
+                importState = .idle
+                Log.persistence.notice(
+                    "Relinked wallpaper \(media.displayName, privacy: .public)"
+                )
+            } catch {
+                rollbackSettings(to: previous, reason: "Relink rollback")
+                throw error
+            }
         } catch {
             importState = .failed(error.localizedDescription)
             Log.persistence.error(
@@ -286,32 +367,178 @@ final class AppModel {
         }
     }
 
+    func setDisplayMode(_ mode: DisplayMode) {
+        guard mode != settings.displayMode else { return }
+        cancelPendingDisplayReconcile()
+
+        if mode == .perDisplay {
+            seedPerDisplayConfigurations()
+        }
+
+        settings.displayMode = mode
+        if var active = settings.wallpaper.active {
+            active.displayMode = mode
+            settings.wallpaper.active = active
+        }
+
+        Log.display.notice("Display mode changed to \(mode.rawValue, privacy: .public)")
+
+        guard settings.wallpaper.active != nil else { return }
+        reconcileActiveWallpaper(reason: "Display mode change")
+    }
+
+    func selectDisplay(_ persistentID: String) {
+        guard displays.contains(where: { $0.persistentID == persistentID && !$0.isMirrored }) else {
+            return
+        }
+        selectedDisplayPersistentID = persistentID
+        Log.display.info("Selected display \(persistentID, privacy: .public)")
+    }
+
+    func assignSelectedMedia(toDisplayPersistentID persistentID: String) {
+        selectDisplay(persistentID)
+        if settings.displayMode != .perDisplay {
+            setDisplayMode(.perDisplay)
+        }
+        applyWallpaper()
+    }
+
+    func clearDisplayAssignment(persistentID: String) {
+        guard settings.displayConfigurations[persistentID] != nil else { return }
+        cancelPendingDisplayReconcile()
+        let previous = settings
+        settings.displayConfigurations.removeValue(forKey: persistentID)
+
+        if missingWallpaper?.displayPersistentID == persistentID {
+            missingWallpaper = nil
+            settings.wallpaper.restoreIssue = nil
+        }
+
+        guard settings.displayMode == .perDisplay, settings.wallpaper.active != nil else {
+            Log.display.notice("Removed display configuration \(persistentID, privacy: .public)")
+            return
+        }
+
+        let assignments = desiredAssignments(
+            for: .perDisplay,
+            using: settings.wallpaper.active?.media
+        )
+        if assignments.isEmpty {
+            wallpaper.remove()
+            stopUnusedMedia(keeping: [])
+            if settings.displayConfigurations.isEmpty {
+                settings.wallpaper.active = nil
+            }
+        } else {
+            do {
+                try applyAssignments(
+                    assignments,
+                    mode: .perDisplay,
+                    reason: "Clear display"
+                )
+            } catch {
+                rollbackSettings(to: previous, reason: "Clear display rollback")
+                Log.surface.error(
+                    "Failed to clear display \(persistentID, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
+                return
+            }
+        }
+
+        Log.display.notice("Removed display configuration \(persistentID, privacy: .public)")
+    }
+
+    func forgetDisconnectedDisplay(persistentID: String) {
+        guard let configuration = settings.displayConfigurations.removeValue(forKey: persistentID) else {
+            return
+        }
+        if missingWallpaper?.displayPersistentID == persistentID {
+            missingWallpaper = nil
+            settings.wallpaper.restoreIssue = nil
+        }
+        if settings.displayMode == .perDisplay,
+           settings.displayConfigurations.isEmpty,
+           !wallpaper.isActive {
+            settings.wallpaper.active = nil
+        }
+        Log.display.notice(
+            "Forgot disconnected display \(configuration.displayName, privacy: .public)"
+        )
+    }
+
     func applyWallpaper() {
-        guard let reference = selectedMedia, let url = selectedMediaURL else { return }
-        let assignment = WallpaperAssignment(media: reference, displayMode: settings.displayMode)
+        guard let reference = selectedMedia, selectedMediaURL != nil else { return }
+        cancelPendingDisplayReconcile()
+        let previous = settings
 
         do {
-            try performApply(assignment: assignment, url: url)
-            settings.wallpaper.active = assignment
-            settings.wallpaper.last = assignment
+            let cached = try cachedMedia(for: reference)
+            let mode = settings.displayMode
+
+            switch mode {
+            case .allScreens, .mainScreen:
+                let assignment = WallpaperAssignment(media: cached.reference, displayMode: mode)
+                let assignments = desiredAssignments(for: mode, using: assignment.media)
+                guard !assignments.isEmpty else {
+                    throw WallpaperSurfaceError.noDisplay
+                }
+
+                try applyAssignments(assignments, mode: mode, reason: "Apply")
+                settings.wallpaper.active = assignment
+                settings.wallpaper.last = assignment
+
+            case .perDisplay:
+                guard let persistentID = targetDisplayPersistentID,
+                      let display = displays.first(where: { $0.persistentID == persistentID }),
+                      !display.isMirrored else {
+                    throw WallpaperSurfaceError.noDisplay
+                }
+
+                let assignment = WallpaperAssignment(
+                    media: cached.reference,
+                    displayMode: .perDisplay
+                )
+                settings.displayConfigurations[persistentID] = DisplayWallpaperConfiguration(
+                    displayName: display.name,
+                    assignment: assignment
+                )
+                settings.wallpaper.active = assignment
+                settings.wallpaper.last = assignment
+
+                let assignments = desiredAssignments(
+                    for: .perDisplay,
+                    using: assignment.media
+                )
+                guard !assignments.isEmpty else {
+                    throw WallpaperSurfaceError.noDisplay
+                }
+                try applyAssignments(
+                    assignments,
+                    mode: .perDisplay,
+                    reason: "Apply display"
+                )
+            }
+
             settings.wallpaper.restoreIssue = nil
             missingWallpaper = nil
             Log.surface.notice(
-                "Applied wallpaper \(assignment.media.displayName, privacy: .public) mode=\(assignment.displayMode.rawValue, privacy: .public)"
+                "Applied wallpaper \(cached.reference.displayName, privacy: .public) mode=\(mode.rawValue, privacy: .public)"
             )
         } catch {
-            settings.wallpaper.active = nil
+            rollbackSettings(to: previous, reason: "Apply rollback")
             Log.surface.error(
-                "Apply failed for \(assignment.media.displayName, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                "Apply failed for \(reference.displayName, privacy: .public): \(error.localizedDescription, privacy: .public)"
             )
         }
     }
 
     func removeWallpaper() {
+        cancelPendingDisplayReconcile()
         wallpaper.remove()
         settings.wallpaper.active = nil
         settings.wallpaper.restoreIssue = nil
         missingWallpaper = nil
+        stopUnusedMedia(keeping: [])
         Log.surface.notice("Removed wallpaper; the desktop picture is visible again")
     }
 
@@ -334,9 +561,34 @@ final class AppModel {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
+    func assignedMediaName(for persistentID: String) -> String? {
+        settings.displayConfigurations[persistentID]?.assignment.media.displayName
+    }
+
+    func surfaceMediaName(for persistentID: String) -> String? {
+        wallpaper.surfaceMediaNames[persistentID]
+    }
+
+    func isSurfaceActive(for persistentID: String) -> Bool {
+        wallpaper.appliedDisplayPersistentIDs.contains(persistentID)
+    }
+
     func copyDiagnostics() {
         let displaySummary = displays
-            .map { "\($0.name) \($0.summary)\($0.isMain ? " [main]" : "")" }
+            .map { display in
+                let config = settings.displayConfigurations[display.persistentID]
+                let surface = wallpaper.appliedDisplayPersistentIDs.contains(display.persistentID)
+                let mirror = display.isMirrored
+                    ? " mirroredWith=\(display.mirrorsDisplayID.map(String.init) ?? "unknown")"
+                    : ""
+                return "\(display.name) id=\(display.persistentID) \(display.summary) main=\(display.isMain) builtIn=\(display.isBuiltIn)\(mirror) assigned=\(config?.assignment.media.displayName ?? "none") surface=\(surface)"
+            }
+            .joined(separator: "\n")
+
+        let disconnectedSummary = disconnectedDisplayConfigurations
+            .map { entry in
+                "\(entry.configuration.displayName) id=\(entry.persistentID) assigned=\(entry.configuration.assignment.media.displayName)"
+            }
             .joined(separator: "\n")
 
         let mediaSummary = selectedMedia.map {
@@ -348,6 +600,7 @@ final class AppModel {
         last=\(settings.wallpaper.last?.media.displayName ?? "none")
         restoreIssue=\(missingWallpaper?.reason ?? "none")
         bookmarkBytes=\(selectedMedia?.bookmarkData.count ?? 0)
+        displayMode=\(settings.displayMode.rawValue)
         displayConfigurations=\(settings.displayConfigurations.count)
         """
 
@@ -355,6 +608,8 @@ final class AppModel {
         \(diagnostics.report)
         Displays:
         \(displaySummary.isEmpty ? "none" : displaySummary)
+        Disconnected display configurations:
+        \(disconnectedSummary.isEmpty ? "none" : disconnectedSummary)
         Settings schema: \(settings.schemaVersion)
         Surface strategy: \(surfaceStrategy.title)
         Resource policy: \(resourcePolicy.summary)
@@ -372,6 +627,212 @@ final class AppModel {
         pasteboard.clearContents()
         pasteboard.setString(report, forType: .string)
         Log.diagnostics.notice("Copied diagnostics report")
+    }
+
+    private func handleDisplayConfigurationChange(_ newDisplays: [DisplayInfo]) {
+        let previousIDs = Set(displays.map(\.persistentID))
+        let currentIDs = Set(newDisplays.map(\.persistentID))
+        let added = currentIDs.subtracting(previousIDs)
+        let removed = previousIDs.subtracting(currentIDs)
+
+        displays = newDisplays
+
+        if let selectedDisplayPersistentID,
+           !currentIDs.contains(selectedDisplayPersistentID) {
+            self.selectedDisplayPersistentID = nil
+        }
+
+        if !added.isEmpty || !removed.isEmpty {
+            Log.display.notice(
+                "Displays added=\(added.sorted().joined(separator: ","), privacy: .public) removed=\(removed.sorted().joined(separator: ","), privacy: .public)"
+            )
+        }
+
+        guard settings.wallpaper.active != nil else { return }
+
+        cancelPendingDisplayReconcile()
+        displayReconcileTask = Task { @MainActor [weak self] in
+            guard let self, !Task.isCancelled else { return }
+            self.reconcileActiveWallpaper(reason: "Display change")
+        }
+    }
+
+    private func cancelPendingDisplayReconcile() {
+        displayReconcileTask?.cancel()
+        displayReconcileTask = nil
+    }
+
+    private func rollbackSettings(to previous: AppSettings, reason: String) {
+        settings = previous
+        guard previous.wallpaper.active != nil else { return }
+        reconcileActiveWallpaper(reason: reason)
+    }
+
+    private func seedPerDisplayConfigurations() {
+        guard let active = settings.wallpaper.active else { return }
+        var added = 0
+
+        for display in displays where !display.isMirrored {
+            guard settings.displayConfigurations[display.persistentID] == nil else { continue }
+            settings.displayConfigurations[display.persistentID] = DisplayWallpaperConfiguration(
+                displayName: display.name,
+                assignment: WallpaperAssignment(media: active.media, displayMode: .perDisplay)
+            )
+            added += 1
+        }
+
+        if added > 0 {
+            Log.display.info("Seeded \(added, privacy: .public) per-display configuration(s)")
+        }
+    }
+
+    private func reconcileActiveWallpaper(reason: String) {
+        guard let active = settings.wallpaper.active else { return }
+        let mode = settings.displayMode
+        let assignments = desiredAssignments(for: mode, using: active.media)
+
+        guard !assignments.isEmpty else {
+            wallpaper.remove()
+            stopUnusedMedia(keeping: [])
+            Log.surface.info(
+                "Wallpaper suspended until a configured display reconnects (\(reason, privacy: .public))"
+            )
+            return
+        }
+
+        do {
+            try applyAssignments(assignments, mode: mode, reason: reason)
+        } catch {
+            Log.surface.error(
+                "Reconcile failed after \(reason, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
+        }
+    }
+
+    private func desiredAssignments(
+        for mode: DisplayMode,
+        using media: MediaReference?
+    ) -> [String: WallpaperAssignment] {
+        let eligibleDisplays = displays.filter { !$0.isMirrored }
+
+        switch mode {
+        case .allScreens:
+            guard let media else { return [:] }
+            return Dictionary(
+                uniqueKeysWithValues: eligibleDisplays.map { display in
+                    (display.persistentID, WallpaperAssignment(media: media, displayMode: .allScreens))
+                }
+            )
+
+        case .mainScreen:
+            guard let media,
+                  let mainDisplay = eligibleDisplays.first(where: \.isMain) ?? eligibleDisplays.first else {
+                return [:]
+            }
+            return [
+                mainDisplay.persistentID: WallpaperAssignment(
+                    media: media,
+                    displayMode: .mainScreen
+                )
+            ]
+
+        case .perDisplay:
+            var assignments: [String: WallpaperAssignment] = [:]
+            for display in eligibleDisplays {
+                guard let configuration = settings.displayConfigurations[display.persistentID] else {
+                    continue
+                }
+                assignments[display.persistentID] = WallpaperAssignment(
+                    media: configuration.assignment.media,
+                    displayMode: .perDisplay
+                )
+            }
+            return assignments
+        }
+    }
+
+    private func applyAssignments(
+        _ assignments: [String: WallpaperAssignment],
+        mode: DisplayMode,
+        reason: String
+    ) throws {
+        var surfaceAssignments: [String: WallpaperSurfaceMedia] = [:]
+        var resolvedMedia: [UUID: CachedMedia] = [:]
+
+        for (persistentID, assignment) in assignments {
+            let cached: CachedMedia
+            if let existing = resolvedMedia[assignment.media.identifier] {
+                cached = existing
+            } else {
+                cached = try cachedMedia(for: assignment.media)
+                resolvedMedia[cached.reference.identifier] = cached
+            }
+            surfaceAssignments[persistentID] = WallpaperSurfaceMedia(
+                identifier: cached.reference.identifier,
+                url: cached.url,
+                displayName: cached.reference.displayName
+            )
+        }
+
+        guard !surfaceAssignments.isEmpty else {
+            throw WallpaperSurfaceError.noDisplay
+        }
+
+        try wallpaper.apply(
+            assignments: surfaceAssignments,
+            settings: settings.playback,
+            displayMode: mode
+        )
+
+        updateDisplayConfigurations(
+            assignments: assignments,
+            resolvedMedia: resolvedMedia,
+            mode: mode
+        )
+        stopUnusedMedia(keeping: Set(resolvedMedia.keys))
+
+        Log.surface.notice(
+            "\(reason, privacy: .public): \(surfaceAssignments.count, privacy: .public) display(s) mode=\(mode.rawValue, privacy: .public)"
+        )
+    }
+
+    private func updateDisplayConfigurations(
+        assignments: [String: WallpaperAssignment],
+        resolvedMedia: [UUID: CachedMedia],
+        mode: DisplayMode
+    ) {
+        let appliedPersistentIDs = wallpaper.appliedDisplayPersistentIDs
+        var configurations = settings.displayConfigurations
+
+        for persistentID in appliedPersistentIDs {
+            guard let assignment = assignments[persistentID],
+                  let cached = resolvedMedia[assignment.media.identifier] else {
+                continue
+            }
+            configurations[persistentID] = DisplayWallpaperConfiguration(
+                displayName: displayName(for: persistentID),
+                assignment: WallpaperAssignment(media: cached.reference, displayMode: mode)
+            )
+        }
+
+        if mode != .perDisplay {
+            let connectedPersistentIDs = Set(
+                displays.filter { !$0.isMirrored }.map(\.persistentID)
+            )
+            for persistentID in connectedPersistentIDs.subtracting(appliedPersistentIDs) {
+                configurations.removeValue(forKey: persistentID)
+            }
+        }
+
+        if configurations != settings.displayConfigurations {
+            settings.displayConfigurations = configurations
+        }
+    }
+
+    private func displayName(for persistentID: String) -> String {
+        displays.first(where: { $0.persistentID == persistentID })?.name
+            ?? settings.displayConfigurations[persistentID]?.displayName
+            ?? "Display"
     }
 
     private func restorePersistedWallpaper() async {
@@ -397,12 +858,18 @@ final class AppModel {
 
         var updated = assignment
         Log.persistence.notice(
-            "\(reason, privacy: .public): resolving \(assignment.media.displayName, privacy: .public)"
+            "\(reason, privacy: .public): resolving \(assignment.media.displayName, privacy: .public) mode=\(assignment.displayMode.rawValue, privacy: .public)"
         )
 
         do {
+            if assignment.displayMode == .perDisplay {
+                try await restorePerDisplay(assignment: assignment, reason: reason)
+                return
+            }
+
             let selection = try await activateMedia(reference: assignment.media)
-            updated.media = selection.reference
+            updated.media = mediaCache[selection.reference.identifier]?.reference
+                ?? selection.reference
 
             try playback.load(
                 url: selection.url,
@@ -410,12 +877,23 @@ final class AppModel {
                 settings: settings.playback,
                 autoplay: false
             )
-            selectedMedia = selection.reference
+            selectedMedia = updated.media
             selectedMediaURL = selection.url
             mediaMetadata = selection.metadata
             importState = .idle
 
-            try performApply(assignment: updated, url: selection.url)
+            let assignments = desiredAssignments(
+                for: updated.displayMode,
+                using: updated.media
+            )
+            guard !assignments.isEmpty else {
+                throw WallpaperSurfaceError.noDisplay
+            }
+            try applyAssignments(
+                assignments,
+                mode: updated.displayMode,
+                reason: reason
+            )
 
             settings.wallpaper.active = updated
             if settings.wallpaper.last == nil
@@ -428,8 +906,133 @@ final class AppModel {
                 "\(reason, privacy: .public) succeeded for \(updated.media.displayName, privacy: .public)"
             )
         } catch {
+            if assignment.displayMode == .perDisplay {
+                Log.persistence.error(
+                    "\(reason, privacy: .public) failed for per-display configuration: \(error.localizedDescription, privacy: .public)"
+                )
+            }
             handleRestoreFailure(error, assignment: updated)
         }
+    }
+
+    private func restorePerDisplay(
+        assignment: WallpaperAssignment,
+        reason: String
+    ) async throws {
+        let eligibleDisplays = displays.filter { !$0.isMirrored }
+        var assignments: [String: WallpaperAssignment] = [:]
+        var resolvedMedia: [UUID: CachedMedia] = [:]
+        var issues: [WallpaperRestoreIssue] = []
+
+        for display in eligibleDisplays {
+            guard let configuration = settings.displayConfigurations[display.persistentID] else {
+                continue
+            }
+
+            do {
+                let cached: CachedMedia
+                if let existing = resolvedMedia[configuration.assignment.media.identifier] {
+                    cached = existing
+                } else {
+                    cached = try cachedMedia(for: configuration.assignment.media)
+                    resolvedMedia[cached.reference.identifier] = cached
+                }
+                assignments[display.persistentID] = WallpaperAssignment(
+                    media: cached.reference,
+                    displayMode: .perDisplay
+                )
+            } catch {
+                issues.append(
+                    WallpaperRestoreIssue(
+                        media: configuration.assignment.media,
+                        displayMode: .perDisplay,
+                        reason: error.localizedDescription,
+                        displayPersistentID: display.persistentID,
+                        displayName: display.name
+                    )
+                )
+            }
+        }
+
+        if assignments.isEmpty {
+            if let firstIssue = issues.first {
+                settings.wallpaper.active = assignment
+                settings.wallpaper.last = assignment
+                settings.wallpaper.restoreIssue = firstIssue
+                missingWallpaper = MissingWallpaper(issue: firstIssue)
+                Log.persistence.error(
+                    "\(reason, privacy: .public) found no restorable display configuration"
+                )
+                return
+            }
+
+            if !settings.displayConfigurations.isEmpty {
+                settings.wallpaper.active = assignment
+                settings.wallpaper.last = assignment
+                settings.wallpaper.restoreIssue = nil
+                missingWallpaper = nil
+                wallpaper.remove()
+                Log.persistence.notice(
+                    "\(reason, privacy: .public) is waiting for a configured display to reconnect"
+                )
+                return
+            }
+
+            let selection = try await activateMedia(reference: assignment.media)
+            guard let mainDisplay = eligibleDisplays.first(where: \.isMain)
+                ?? eligibleDisplays.first else {
+                throw WallpaperSurfaceError.noDisplay
+            }
+            let media = mediaCache[selection.reference.identifier]?.reference ?? selection.reference
+            let fallback = WallpaperAssignment(media: media, displayMode: .perDisplay)
+            settings.displayConfigurations[mainDisplay.persistentID] = DisplayWallpaperConfiguration(
+                displayName: mainDisplay.name,
+                assignment: fallback
+            )
+            assignments[mainDisplay.persistentID] = fallback
+            selectedMedia = media
+            selectedMediaURL = selection.url
+            mediaMetadata = selection.metadata
+            importState = .idle
+            try playback.load(
+                url: selection.url,
+                duration: selection.metadata.duration,
+                settings: settings.playback,
+                autoplay: false
+            )
+        }
+
+        try applyAssignments(assignments, mode: .perDisplay, reason: reason)
+
+        let appliedPersistentIDs = wallpaper.appliedDisplayPersistentIDs
+        let firstApplied = assignments.first(where: { appliedPersistentIDs.contains($0.key) })?.value
+            ?? assignments.values.first
+        let active = WallpaperAssignment(
+            media: firstApplied?.media ?? assignment.media,
+            displayMode: .perDisplay
+        )
+
+        settings.wallpaper.active = active
+        settings.wallpaper.last = assignment
+        let firstIssue = issues.first
+        settings.wallpaper.restoreIssue = firstIssue
+        missingWallpaper = firstIssue.map(MissingWallpaper.init)
+
+        if selectedMedia == nil,
+           let cached = mediaCache[active.media.identifier] {
+            selectedMedia = active.media
+            selectedMediaURL = cached.url
+            try? playback.load(
+                url: cached.url,
+                duration: active.media.lastKnownDuration ?? 0,
+                settings: settings.playback,
+                autoplay: false
+            )
+        }
+
+        Log.persistence.notice(
+            "\(reason, privacy: .public) restored \(appliedPersistentIDs.count, privacy: .public) per-display surface(s) issues=\(issues.count, privacy: .public)"
+        )
     }
 
     private func handleRestoreFailure(_ error: Error, assignment: WallpaperAssignment) {
@@ -467,8 +1070,15 @@ final class AppModel {
             var updated = resolved.reference
             updated.lastKnownDuration = inspected.duration
 
-            activeMediaResource?.stopAccessing()
-            activeMediaResource = resolved.resource
+            let cached = CachedMedia(
+                reference: updated,
+                url: resolved.resource.url,
+                resource: resolved.resource
+            )
+            if let existing = mediaCache[updated.identifier] {
+                existing.resource.stopAccessing()
+            }
+            mediaCache[updated.identifier] = cached
 
             return MediaSelection(
                 url: resolved.resource.url,
@@ -481,28 +1091,42 @@ final class AppModel {
         }
     }
 
-    private func performApply(assignment: WallpaperAssignment, url: URL) throws {
-        try wallpaper.apply(
-            url: url,
-            displayName: assignment.media.displayName,
-            settings: settings.playback,
-            displayMode: assignment.displayMode
+    private func cachedMedia(for reference: MediaReference) throws -> CachedMedia {
+        if let cached = mediaCache[reference.identifier] {
+            if FileManager.default.fileExists(atPath: cached.url.path) {
+                return cached
+            }
+            cached.resource.stopAccessing()
+            mediaCache.removeValue(forKey: reference.identifier)
+        }
+
+        let resolved = try MediaBookmark.resolve(reference)
+        let cached = CachedMedia(
+            reference: resolved.reference,
+            url: resolved.resource.url,
+            resource: resolved.resource
         )
-        recordDisplayConfigurations(for: assignment)
+        mediaCache[cached.reference.identifier] = cached
+        return cached
     }
 
-    private func recordDisplayConfigurations(for assignment: WallpaperAssignment) {
-        let appliedIDs = Set(wallpaper.appliedDisplayIDs)
-        guard !appliedIDs.isEmpty else { return }
-
-        var configurations = settings.displayConfigurations
-        for display in displays where appliedIDs.contains(display.id) {
-            configurations[display.persistentID] = DisplayWallpaperConfiguration(
-                displayName: display.name,
-                assignment: assignment
-            )
+    private func stopUnusedMedia(keeping identifiers: Set<UUID>) {
+        var keep = identifiers
+        if let selectedMedia {
+            keep.insert(selectedMedia.identifier)
         }
-        settings.displayConfigurations = configurations
+
+        for (identifier, cached) in Array(mediaCache) where !keep.contains(identifier) {
+            cached.resource.stopAccessing()
+            mediaCache.removeValue(forKey: identifier)
+        }
+    }
+
+    private func stopAllMediaResources() {
+        for cached in mediaCache.values {
+            cached.resource.stopAccessing()
+        }
+        mediaCache.removeAll()
     }
 }
 

@@ -22,17 +22,23 @@ struct WallpaperRestoreIssue: Codable, Equatable {
     var displayMode: DisplayMode
     var reason: String
     var occurredAt: Date
+    var displayPersistentID: String?
+    var displayName: String?
 
     init(
         media: MediaReference,
         displayMode: DisplayMode,
         reason: String,
-        occurredAt: Date = Date()
+        occurredAt: Date = Date(),
+        displayPersistentID: String? = nil,
+        displayName: String? = nil
     ) {
         self.media = media
         self.displayMode = displayMode
         self.reason = reason
         self.occurredAt = occurredAt
+        self.displayPersistentID = displayPersistentID
+        self.displayName = displayName
     }
 
     init(from decoder: Decoder) throws {
@@ -44,6 +50,11 @@ struct WallpaperRestoreIssue: Codable, Equatable {
             ?? "The saved wallpaper couldn't be restored."
         occurredAt = try container.decodeIfPresent(Date.self, forKey: .occurredAt)
             ?? Date()
+        displayPersistentID = try container.decodeIfPresent(
+            String.self,
+            forKey: .displayPersistentID
+        )
+        displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
     }
 }
 
@@ -96,6 +107,8 @@ struct MissingWallpaper: Equatable, Identifiable {
     var displayMode: DisplayMode
     var reason: String
     var occurredAt: Date
+    var displayPersistentID: String?
+    var targetDisplayName: String?
 
     var id: UUID { reference.identifier }
 
@@ -104,7 +117,10 @@ struct MissingWallpaper: Equatable, Identifiable {
         displayMode = issue.displayMode
         reason = issue.reason
         occurredAt = issue.occurredAt
+        displayPersistentID = issue.displayPersistentID
+        targetDisplayName = issue.displayName
     }
 
     var displayName: String { reference.displayName }
+    var displayDescription: String { targetDisplayName ?? displayName }
 }

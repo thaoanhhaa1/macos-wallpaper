@@ -4,6 +4,7 @@ enum WallpaperStatus: Equatable {
     case noWallpaper
     case playing
     case paused
+    case waitingForDisplay
     case error(String)
 
     var title: String {
@@ -11,6 +12,7 @@ enum WallpaperStatus: Equatable {
         case .noWallpaper: "No Wallpaper"
         case .playing: "Playing"
         case .paused: "Paused"
+        case .waitingForDisplay: "Waiting for Display"
         case .error: "Error"
         }
     }
@@ -20,6 +22,7 @@ enum WallpaperStatus: Equatable {
         case .noWallpaper: "photo.on.rectangle"
         case .playing: "play.rectangle.fill"
         case .paused: "pause.rectangle.fill"
+        case .waitingForDisplay: "display.trianglebadge.exclamationmark"
         case .error: "exclamationmark.triangle.fill"
         }
     }

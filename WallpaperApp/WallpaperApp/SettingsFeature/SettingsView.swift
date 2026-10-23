@@ -11,6 +11,7 @@ struct SettingsView: View {
                 header
                 MediaCard(model: model)
                 WallpaperCard(model: model)
+                DisplaySettingsCard(model: model)
                 systemSection
                 developmentSection
                 footer
@@ -41,7 +42,7 @@ struct SettingsView: View {
 
             Spacer()
 
-            badge("PHASE 4")
+            badge("PHASE 5")
         }
     }
 
@@ -60,19 +61,13 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                ForEach(model.displays) { display in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(display.name)
-                            .font(.callout)
-                        if display.isMain {
-                            badge("MAIN")
-                        }
-                        Spacer()
-                        Text(display.summary)
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
+                if let mirrored = model.displays.first(where: \.isMirrored) {
+                    Label(
+                        "\(mirrored.name) is mirrored; a single surface is drawn on the master.",
+                        systemImage: "rectangle.on.rectangle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
 
                 Divider()
@@ -148,7 +143,7 @@ struct SettingsView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
-            Text("Phase 4: persists the wallpaper bookmark and settings, restores them on launch and offers relinking when the video is missing.")
+            Text("Phase 5: display lifecycle, stable per-display assignments, mirrored-display handling and reconnect without losing configuration.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

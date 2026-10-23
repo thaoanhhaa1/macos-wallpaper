@@ -3,7 +3,7 @@
 Ứng dụng macOS native dùng video làm hình nền động. Repo hiện có hai phần:
 
 - `WallpaperSpike/` — feasibility spike của Pha 0.
-- `WallpaperApp/` — ứng dụng thật, hiện hoàn thành Pha 1, Pha 2, Pha 3 và Pha 4.
+- `WallpaperApp/` — ứng dụng thật, hiện hoàn thành Pha 1, Pha 2, Pha 3, Pha 4 và Pha 5.
 
 Quyết định kỹ thuật và bảng compatibility nằm trong [`FEASIBILITY.md`](FEASIBILITY.md);
 phạm vi các pha tiếp theo nằm trong [`PLAN.md`](PLAN.md).
@@ -106,6 +106,44 @@ launch at login.
 - Relaunch sau khi nâng cấp từ bản schema v1: settings cũ vẫn giữ, schema được ghi thành 2.
 - Kiểm tra **Copy Diagnostics** có `active`, `last`, `restoreIssue`, `bookmarkBytes` và
   `displayConfigurations`.
+
+### Phạm vi Phase 5
+
+- `DisplayCoordinator` theo dõi `NSApplication.didChangeScreenParametersNotification`, giữ
+  danh sách display theo `CGDirectDisplayID` và UUID ổn định; cập nhật frame/scale khi
+  geometry thay đổi.
+- Một playback surface cho mỗi display theo cấu hình; display dùng cùng video chia sẻ
+  `AVPlayer`, display dùng video khác có player riêng.
+- Chế độ **All displays**, **Main display** và **Per display** trong Settings và menu bar.
+- Display picker hiển thị tên, kích thước, scale factor, main/built-in/mirrored, video được
+  gán và trạng thái surface hiện tại.
+- Mỗi display được lưu cấu hình theo persistent UUID; rút display không xóa cấu hình.
+  Display đang disconnected hiện trong mục **Saved but disconnected** và có nút **Forget**.
+- Khi display quay lại, surface được tạo lại và video đã lưu được áp dụng mà không cần
+  thao tác thêm.
+- Display mirrored chỉ vẽ một surface trên mirror master; display mirror bị bỏ qua để
+  tránh hai cửa sổ chồng nhau.
+- Nếu toàn bộ display đã cấu hình bị rút, wallpaper chuyển sang trạng thái
+  **Waiting for Display** và tự phục hồi khi display quay lại.
+- Copy Diagnostics có thêm display UUID, trạng thái mirrored, cấu hình đã lưu, display
+  disconnected và surface hiện tại.
+
+### Kiểm tra multi-display thủ công
+
+- Chọn **All displays**, Apply: mỗi display có một surface, desktop icons và cửa sổ vẫn
+  tương tác bình thường.
+- Chọn **Per display**, dùng **Use Selected Video** cho từng display với hai video khác
+  nhau: mỗi display phát đúng video, tên và trạng thái hiển thị đúng trong picker.
+- Rút display ngoài: surface của display đó biến mất, cấu hình vẫn còn trong
+  **Saved but disconnected**. Cắm lại: surface và video tự quay lại.
+- Rút display duy nhất đã cấu hình trong chế độ per-display: trạng thái chuyển thành
+  **Waiting for Display**, Remove Wallpaper vẫn hoạt động.
+- Đổi resolution/scale hoặc arrangement: surface cập nhật frame, không có cửa sổ orphan.
+- Bật mirrored display: chỉ có một surface trên master; display mirror hiển thị nội dung
+  theo master và được đánh dấu **MIRRORED**.
+- Chuyển Spaces, Mission Control và app fullscreen: surface không chen lên trên.
+- Clear assignment của một display: chỉ display đó mất surface; các display khác giữ
+  nguyên video.
 
 ### Kiểm tra playback thủ công
 
@@ -235,12 +273,11 @@ dù window vẫn hiển thị trên màn hình vật lý. Vì vậy:
   overlay (chấp nhận che icons) hoặc giới hạn ở màn hình chính; chi tiết trong
   `FEASIBILITY.md`.
 
-## Chưa nằm trong Phase 0–4
+## Chưa nằm trong Phase 0–5
 
 - Launch at login.
-- Multi-display configuration UI đầy đủ (Phase 5); Phase 4 mới lưu cấu hình theo display.
 - Resource policy (pause on fullscreen/battery/sleep tùy chọn).
 - Signing, sandbox, notarization.
-- Manual matrix đầy đủ cho Spaces, Mission Control, fullscreen, sleep/wake và hot-plug.
+- Manual matrix còn lại cho Spaces, Mission Control, fullscreen và sleep/wake.
 
 Xem `PLAN.md` để biết phạm vi các pha tiếp theo.

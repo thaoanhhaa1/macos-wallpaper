@@ -43,12 +43,30 @@ struct MenuBarContent: View {
         Button("Remove Wallpaper") {
             model.removeWallpaper()
         }
-        .disabled(!model.wallpaper.isActive && model.wallpaper.state.failureReason == nil)
+        .disabled(
+            !model.wallpaper.isActive
+                && model.wallpaper.state.failureReason == nil
+                && !model.isWaitingForDisplay
+        )
 
         Button("Restore Last Wallpaper") {
             Task { await model.restoreLastWallpaper() }
         }
         .disabled(!model.hasLastWallpaper || model.wallpaper.isActive || model.isRestoringWallpaper)
+
+        Menu("Display Mode") {
+            ForEach(DisplayMode.allCases) { mode in
+                Button {
+                    model.setDisplayMode(mode)
+                } label: {
+                    if model.settings.displayMode == mode {
+                        Label(mode.title, systemImage: "checkmark")
+                    } else {
+                        Text(mode.title)
+                    }
+                }
+            }
+        }
 
         Divider()
 

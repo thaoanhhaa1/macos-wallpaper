@@ -33,16 +33,21 @@ struct WallpaperCard: View {
                 }
 
                 HStack(spacing: 10) {
-                    Button("Apply as Wallpaper") {
+                    Button(applyButtonTitle) {
                         model.applyWallpaper()
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(!model.hasMedia || model.wallpaper.isActive)
+                    .disabled(!canApply)
 
                     Button("Remove Wallpaper") {
                         model.removeWallpaper()
                     }
-                    .disabled(!model.wallpaper.isActive && model.wallpaper.state.failureReason == nil && model.missingWallpaper == nil)
+                    .disabled(
+                        !model.wallpaper.isActive
+                            && model.wallpaper.state.failureReason == nil
+                            && model.missingWallpaper == nil
+                            && !model.isWaitingForDisplay
+                    )
 
                     Button("Restore Last Wallpaper") {
                         Task { await model.restoreLastWallpaper() }
@@ -93,7 +98,8 @@ struct WallpaperCard: View {
 
     private var detail: String {
         if let missing = model.missingWallpaper {
-            return "The saved wallpaper “\(missing.displayName)” can't be opened. Relink it or choose another video."
+            let target = missing.targetDisplayName.map { " on \($0)" } ?? ""
+            return "The saved wallpaper “\(missing.displayName)”\(target) can't be opened. Relink it or choose another video."
         }
         if let failure = model.wallpaper.state.failureReason {
             return failure
@@ -103,13 +109,39 @@ struct WallpaperCard: View {
             let state = model.wallpaper.isPaused ? "paused" : "playing"
             return "\(name) is \(state) on \(model.wallpaper.surfaceCount) display\(model.wallpaper.surfaceCount == 1 ? "" : "s")."
         }
+        if model.isWaitingForDisplay {
+            return "The saved wallpaper is waiting for a configured display to reconnect."
+        }
         if let last = model.lastWallpaperName {
             return "Last wallpaper: \(last). Apply the selected video or restore the previous one."
         }
         return "Apply the validated video as a desktop surface. Desktop icons and windows stay interactive."
     }
 
+    private var applyButtonTitle: String {
+        model.settings.displayMode == .perDisplay
+            ? "Apply to Target Display"
+            : "Apply as Wallpaper"
+    }
+
+    private var canApply: Bool {
+        guard model.hasMedia else { return false }
+        if model.settings.displayMode == .perDisplay {
+            return true
+        }
+        return !model.wallpaper.isActive
+    }
+
     private var surfaceNote: String {
-        "\(model.surfaceStrategy.title) · click-through · all Spaces · \(model.settings.displayMode.title)"
+        let target = targetDisplayName.map { " · target: \($0)" } ?? ""
+        return "\(model.surfaceStrategy.title) · click-through · all Spaces · \(model.settings.displayMode.title)\(target)"
+    }
+
+    private var targetDisplayName: String? {
+        guard model.settings.displayMode == .perDisplay,
+              let persistentID = model.targetDisplayPersistentID else {
+            return nil
+        }
+        return model.displays.first(where: { $0.persistentID == persistentID })?.name
     }
 }

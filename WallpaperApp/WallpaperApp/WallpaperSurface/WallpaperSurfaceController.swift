@@ -25,11 +25,19 @@ enum WallpaperSurfaceError: LocalizedError, Equatable {
         case .fileMissing(let name):
             "The wallpaper video is missing: \(name)"
         case .noDisplay:
-            "No display is available for the wallpaper surface."
+            "No display has a wallpaper assigned."
         case .playback(let message):
             "The wallpaper couldn't start playing: \(message)"
         }
     }
+}
+
+struct WallpaperSurfaceMedia: Equatable, Identifiable {
+    let identifier: UUID
+    let url: URL
+    let displayName: String
+
+    var id: UUID { identifier }
 }
 
 @MainActor
@@ -40,9 +48,14 @@ final class WallpaperSurfaceController {
     private(set) var appliedMediaName: String?
     private(set) var isActive = false
     private(set) var appliedDisplayIDs: [CGDirectDisplayID] = []
+    private(set) var appliedDisplayPersistentIDs: Set<String> = []
+    private(set) var appliedMediaIdentifiers: Set<UUID> = []
+    private(set) var surfaceMediaNames: [String: String] = [:]
 
     @ObservationIgnored private(set) var playback: SurfacePlayback?
+    @ObservationIgnored private var playbacks: [UUID: PlaybackSlot] = [:]
     @ObservationIgnored private var windows: [CGDirectDisplayID: WallpaperSurfaceWindow] = [:]
+    @ObservationIgnored private var windowMediaIDs: [CGDirectDisplayID: UUID] = [:]
     @ObservationIgnored private var settings = PlaybackSettings()
     @ObservationIgnored private var displayMode: DisplayMode = .mainScreen
     @ObservationIgnored private var observerTokens: [NSObjectProtocol] = []
@@ -54,8 +67,20 @@ final class WallpaperSurfaceController {
         self.strategy = strategy
     }
 
+    private struct PlaybackSlot {
+        let media: WallpaperSurfaceMedia
+        let playback: SurfacePlayback
+    }
+
+    private struct DesiredSurface {
+        let displayID: CGDirectDisplayID
+        let persistentID: String
+        let screen: NSScreen
+        let media: WallpaperSurfaceMedia
+    }
+
     var isPaused: Bool {
-        playback?.isPaused ?? false
+        !playbacks.isEmpty && playbacks.values.allSatisfy(\.playback.isPaused)
     }
 
     var appliedDisplayMode: DisplayMode {
@@ -67,48 +92,134 @@ final class WallpaperSurfaceController {
     }
 
     func apply(
-        url: URL,
-        displayName: String,
+        assignments: [String: WallpaperSurfaceMedia],
         settings: PlaybackSettings,
         displayMode: DisplayMode
     ) throws {
-        teardownSurfaces(resetApplied: true)
-
-        self.settings = settings
-        self.displayMode = displayMode
-
-        let playback = SurfacePlayback()
-        playback.onFailure = { [weak self] message in
-            self?.handlePlaybackFailure(message)
+        let desired = desiredSurfaces(for: assignments)
+        guard !desired.isEmpty else {
+            throw WallpaperSurfaceError.noDisplay
         }
 
+        var mediaByID: [UUID: WallpaperSurfaceMedia] = [:]
+        for surface in desired.values {
+            mediaByID[surface.media.identifier] = surface.media
+        }
+
+        var prepared: [UUID: SurfacePlayback] = [:]
         do {
-            try playback.load(url: url, settings: settings)
-            try rebuildWindows(with: playback.player)
+            for (mediaID, media) in mediaByID {
+                if let slot = playbacks[mediaID], slot.media == media {
+                    continue
+                }
+                let playback = SurfacePlayback()
+                playback.onFailure = { [weak self] message in
+                    self?.handlePlaybackFailure(message)
+                }
+                try playback.load(url: media.url, settings: settings)
+                prepared[mediaID] = playback
+            }
         } catch {
-            playback.teardown()
-            self.playback = nil
-            teardownWindows()
-            isActive = false
-            surfaceCount = 0
-            appliedDisplayIDs = []
-            state = .failed(error.localizedDescription)
+            for playback in prepared.values {
+                playback.onFailure = nil
+                playback.teardown()
+            }
             Log.surface.error(
-                "Failed to apply wallpaper \(displayName, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                "Failed to prepare wallpaper media: \(error.localizedDescription, privacy: .public)"
             )
             throw error
         }
 
-        self.playback = playback
-        appliedMediaName = displayName
+        let neededIDs = Set(mediaByID.keys)
+        for mediaID in Array(playbacks.keys) where !neededIDs.contains(mediaID) {
+            if let slot = playbacks.removeValue(forKey: mediaID) {
+                slot.playback.onFailure = nil
+                slot.playback.teardown()
+            }
+        }
+
+        for (mediaID, playback) in prepared {
+            if let existing = playbacks[mediaID] {
+                existing.playback.onFailure = nil
+                existing.playback.teardown()
+            }
+            guard let media = mediaByID[mediaID] else {
+                playback.onFailure = nil
+                playback.teardown()
+                continue
+            }
+            playbacks[mediaID] = PlaybackSlot(media: media, playback: playback)
+        }
+
+        do {
+            for slot in playbacks.values where prepared[slot.media.identifier] == nil {
+                try slot.playback.apply(settings)
+            }
+        } catch {
+            teardownSurfaces(resetApplied: true)
+            state = .failed(error.localizedDescription)
+            Log.surface.error(
+                "Failed to update wallpaper playback settings: \(error.localizedDescription, privacy: .public)"
+            )
+            throw error
+        }
+
+        self.settings = settings
+        self.displayMode = displayMode
+
+        let staleDisplayIDs = windows.keys.filter { desired[$0] == nil }
+        for displayID in staleDisplayIDs {
+            if let window = windows.removeValue(forKey: displayID) {
+                window.teardown()
+                Log.surface.info(
+                    "Removed surface for display \(displayID, privacy: .public)"
+                )
+            }
+            windowMediaIDs.removeValue(forKey: displayID)
+        }
+
+        for (displayID, surface) in desired {
+            let mediaID = surface.media.identifier
+            guard let playback = playbacks[mediaID]?.playback,
+                  let player = playback.player else {
+                continue
+            }
+
+            if let window = windows[displayID] {
+                window.update(screen: surface.screen, settings: settings, strategy: strategy)
+                window.setPlayer(player)
+            } else {
+                let window = WallpaperSurfaceWindow(
+                    screen: surface.screen,
+                    displayID: displayID,
+                    player: player,
+                    settings: settings,
+                    strategy: strategy
+                )
+                windows[displayID] = window
+                window.present()
+            }
+            windowMediaIDs[displayID] = mediaID
+        }
+
+        self.playback = playbacks.values.first?.playback
+        appliedDisplayIDs = Array(windows.keys)
+        appliedDisplayPersistentIDs = Set(desired.values.map(\.persistentID))
+        appliedMediaIdentifiers = Set(desired.values.map(\.media.identifier))
+        surfaceMediaNames = Dictionary(
+            uniqueKeysWithValues: desired.values.map { ($0.persistentID, $0.media.displayName) }
+        )
+        let uniqueNames = Set(desired.values.map(\.media.displayName))
+        appliedMediaName = uniqueNames.count == 1
+            ? uniqueNames.first
+            : "\(uniqueNames.count) videos"
         isActive = true
         surfaceCount = windows.count
-        appliedDisplayIDs = Array(windows.keys)
         state = .active
         installObserversIfNeeded()
 
         Log.surface.notice(
-            "Applied wallpaper \(displayName, privacy: .public) surfaces=\(self.surfaceCount, privacy: .public) mode=\(displayMode.rawValue, privacy: .public) level=\(self.strategy.windowLevel.rawValue, privacy: .public)"
+            "Applied wallpaper media=\(uniqueNames.count, privacy: .public) surfaces=\(self.surfaceCount, privacy: .public) mode=\(displayMode.rawValue, privacy: .public) level=\(self.strategy.windowLevel.rawValue, privacy: .public)"
         )
     }
 
@@ -116,7 +227,7 @@ final class WallpaperSurfaceController {
         guard isActive || state.failureReason != nil else { return }
         teardownSurfaces(resetApplied: true)
         state = .inactive
-        Log.surface.notice("Removed wallpaper surface")
+        Log.surface.notice("Removed wallpaper surfaces")
     }
 
     func shutdown() {
@@ -127,53 +238,47 @@ final class WallpaperSurfaceController {
 
     func play() {
         guard isActive else { return }
-        playback?.setPaused(false)
+        for slot in playbacks.values {
+            slot.playback.setPaused(false)
+        }
     }
 
     func pause() {
         guard isActive else { return }
-        playback?.setPaused(true)
+        for slot in playbacks.values {
+            slot.playback.setPaused(true)
+        }
     }
 
     func togglePlayback() {
-        guard isActive, let playback else { return }
-        playback.setPaused(!playback.isPaused)
+        guard isActive else { return }
+        let shouldPause = !isPaused
+        for slot in playbacks.values {
+            slot.playback.setPaused(shouldPause)
+        }
     }
 
-    func update(settings: PlaybackSettings, displayMode: DisplayMode) {
+    func update(settings: PlaybackSettings) {
         self.settings = settings
-        let modeChanged = displayMode != self.displayMode
-        self.displayMode = displayMode
-
         guard isActive else { return }
 
         for window in windows.values {
             window.update(settings: settings)
         }
 
-        let previousPlayer = playback?.player
         do {
-            try playback?.apply(settings)
+            for slot in playbacks.values {
+                try slot.playback.apply(settings)
+            }
         } catch {
             handlePlaybackFailure(error.localizedDescription)
             return
         }
 
-        if let player = playback?.player, player !== previousPlayer {
-            for window in windows.values {
-                window.setPlayer(player)
-            }
+        for (displayID, mediaID) in windowMediaIDs {
+            guard let player = playbacks[mediaID]?.playback.player else { continue }
+            windows[displayID]?.setPlayer(player)
         }
-
-        if modeChanged {
-            rebuildAfterDisplayChange()
-        }
-    }
-
-    func handleDisplayChange(displayMode: DisplayMode) {
-        self.displayMode = displayMode
-        guard isActive else { return }
-        rebuildAfterDisplayChange()
     }
 
     func reassertOrdering() {
@@ -186,82 +291,51 @@ final class WallpaperSurfaceController {
         )
     }
 
-    private func rebuildAfterDisplayChange() {
-        guard let player = playback?.player else { return }
+    private func desiredSurfaces(
+        for assignments: [String: WallpaperSurfaceMedia]
+    ) -> [CGDirectDisplayID: DesiredSurface] {
+        let mainDisplayID = NSScreen.main.map(DisplayInfo.displayID(for:))
+        var desired: [CGDirectDisplayID: DesiredSurface] = [:]
 
-        do {
-            try rebuildWindows(with: player)
-            surfaceCount = windows.count
-            appliedDisplayIDs = Array(windows.keys)
-            Log.surface.info(
-                "Rebuilt wallpaper surfaces count=\(self.surfaceCount, privacy: .public)"
+        for screen in NSScreen.screens {
+            let info = DisplayInfo(
+                screen: screen,
+                isMain: DisplayInfo.displayID(for: screen) == mainDisplayID
             )
-        } catch {
-            handlePlaybackFailure(error.localizedDescription)
-        }
-    }
-
-    private func rebuildWindows(with player: AVQueuePlayer?) throws {
-        guard let player else {
-            throw WallpaperSurfaceError.playback("The wallpaper player is unavailable.")
-        }
-
-        let screens = desiredScreens()
-        var desired: [CGDirectDisplayID: NSScreen] = [:]
-        for screen in screens {
-            if let displayID = Self.displayID(for: screen) {
-                desired[displayID] = screen
-            }
-        }
-
-        guard !desired.isEmpty else {
-            throw WallpaperSurfaceError.noDisplay
-        }
-
-        let staleIDs = windows.keys.filter { desired[$0] == nil }
-        for displayID in staleIDs {
-            if let window = windows.removeValue(forKey: displayID) {
-                window.teardown()
-                Log.surface.info(
-                    "Removed surface for display \(displayID, privacy: .public)"
+            guard !info.isMirrored else {
+                Log.display.info(
+                    "Skipping mirrored display \(info.persistentID, privacy: .public)"
                 )
+                continue
             }
+            guard let media = assignments[info.persistentID] else { continue }
+            desired[info.id] = DesiredSurface(
+                displayID: info.id,
+                persistentID: info.persistentID,
+                screen: screen,
+                media: media
+            )
         }
 
-        for (displayID, screen) in desired {
-            if let window = windows[displayID] {
-                window.update(screen: screen, settings: settings, strategy: strategy)
-            } else {
-                let window = WallpaperSurfaceWindow(
-                    screen: screen,
-                    displayID: displayID,
-                    player: player,
-                    settings: settings,
-                    strategy: strategy
-                )
-                windows[displayID] = window
-                window.present()
-            }
-        }
-    }
-
-    private func desiredScreens() -> [NSScreen] {
-        switch displayMode {
-        case .allScreens:
-            NSScreen.screens
-        case .mainScreen, .perDisplay:
-            Array(NSScreen.screens.prefix(1))
-        }
+        return desired
     }
 
     private func teardownSurfaces(resetApplied: Bool) {
         teardownWindows()
-        playback?.onFailure = nil
-        playback?.teardown()
+
+        for slot in playbacks.values {
+            slot.playback.onFailure = nil
+            slot.playback.teardown()
+        }
+        playbacks.removeAll()
         playback = nil
         isActive = false
         surfaceCount = 0
         appliedDisplayIDs = []
+        appliedDisplayPersistentIDs = []
+        appliedMediaIdentifiers = []
+        surfaceMediaNames = [:]
+        windowMediaIDs = [:]
         if resetApplied {
             appliedMediaName = nil
         }
@@ -336,12 +410,6 @@ final class WallpaperSurfaceController {
         }
         observerTokens.removeAll()
         isObserving = false
-    }
-
-    private static func displayID(for screen: NSScreen) -> CGDirectDisplayID? {
-        let key = NSDeviceDescriptionKey("NSScreenNumber")
-        guard let number = screen.deviceDescription[key] as? NSNumber else { return nil }
-        return number.uint32Value
     }
 
     deinit {
