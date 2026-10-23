@@ -51,6 +51,8 @@ final class WallpaperSurfaceController {
     private(set) var appliedDisplayPersistentIDs: Set<String> = []
     private(set) var appliedMediaIdentifiers: Set<UUID> = []
     private(set) var surfaceMediaNames: [String: String] = [:]
+    private(set) var isUserPaused = false
+    private(set) var policyPauseReasons: Set<ResourcePauseReason> = []
 
     @ObservationIgnored private(set) var playback: SurfacePlayback?
     @ObservationIgnored private var playbacks: [UUID: PlaybackSlot] = [:]
@@ -81,6 +83,20 @@ final class WallpaperSurfaceController {
 
     var isPaused: Bool {
         !playbacks.isEmpty && playbacks.values.allSatisfy(\.playback.isPaused)
+    }
+
+    var isPolicyPaused: Bool {
+        !policyPauseReasons.isEmpty
+    }
+
+    var playerCount: Int {
+        playbacks.count
+    }
+
+    var droppedFrameStats: DroppedFrameStats {
+        playbacks.values.reduce(.zero) { result, slot in
+            result + slot.playback.droppedFrameStats()
+        }
     }
 
     var appliedDisplayMode: DisplayMode {
@@ -217,6 +233,7 @@ final class WallpaperSurfaceController {
         surfaceCount = windows.count
         state = .active
         installObserversIfNeeded()
+        applyEffectivePause()
 
         Log.surface.notice(
             "Applied wallpaper media=\(uniqueNames.count, privacy: .public) surfaces=\(self.surfaceCount, privacy: .public) mode=\(displayMode.rawValue, privacy: .public) level=\(self.strategy.windowLevel.rawValue, privacy: .public)"
@@ -227,34 +244,57 @@ final class WallpaperSurfaceController {
         guard isActive || state.failureReason != nil else { return }
         teardownSurfaces(resetApplied: true)
         state = .inactive
+        isUserPaused = false
         Log.surface.notice("Removed wallpaper surfaces")
     }
 
     func shutdown() {
         teardownSurfaces(resetApplied: true)
         state = .inactive
+        isUserPaused = false
+        policyPauseReasons = []
         removeObservers()
     }
 
     func play() {
         guard isActive else { return }
-        for slot in playbacks.values {
-            slot.playback.setPaused(false)
-        }
+        isUserPaused = false
+        applyEffectivePause()
     }
 
     func pause() {
         guard isActive else { return }
-        for slot in playbacks.values {
-            slot.playback.setPaused(true)
-        }
+        isUserPaused = true
+        applyEffectivePause()
     }
 
     func togglePlayback() {
         guard isActive else { return }
-        let shouldPause = !isPaused
-        for slot in playbacks.values {
-            slot.playback.setPaused(shouldPause)
+
+        if !isPaused {
+            isUserPaused = true
+        } else if isUserPaused {
+            isUserPaused = false
+        } else if isPolicyPaused {
+            return
+        }
+
+        applyEffectivePause()
+    }
+
+    func setResourcePauseReasons(_ reasons: Set<ResourcePauseReason>) {
+        guard reasons != policyPauseReasons else { return }
+        policyPauseReasons = reasons
+        applyEffectivePause()
+
+        if reasons.isEmpty {
+            Log.policy.notice("Resource policy resumed wallpaper playback")
+        } else {
+            let summary = reasons
+                .sorted { $0.title < $1.title }
+                .map(\.title)
+                .joined(separator: ", ")
+            Log.policy.notice("Resource policy paused wallpaper: \(summary, privacy: .public)")
         }
     }
 
@@ -278,6 +318,16 @@ final class WallpaperSurfaceController {
         for (displayID, mediaID) in windowMediaIDs {
             guard let player = playbacks[mediaID]?.playback.player else { continue }
             windows[displayID]?.setPlayer(player)
+        }
+
+        applyEffectivePause()
+    }
+
+    private func applyEffectivePause() {
+        guard isActive else { return }
+        let shouldPause = isUserPaused || !policyPauseReasons.isEmpty
+        for slot in playbacks.values {
+            slot.playback.setPaused(shouldPause)
         }
     }
 

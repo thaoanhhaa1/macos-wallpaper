@@ -106,8 +106,13 @@ struct WallpaperCard: View {
         }
         if model.wallpaper.isActive {
             let name = model.wallpaper.appliedMediaName ?? "Video wallpaper"
+            let count = model.wallpaper.surfaceCount
+            let suffix = count == 1 ? "" : "s"
+            if model.wallpaper.isPaused, let reason = model.pauseReasonSummary {
+                return "\(name) is paused on \(count) display\(suffix): \(reason)."
+            }
             let state = model.wallpaper.isPaused ? "paused" : "playing"
-            return "\(name) is \(state) on \(model.wallpaper.surfaceCount) display\(model.wallpaper.surfaceCount == 1 ? "" : "s")."
+            return "\(name) is \(state) on \(count) display\(suffix)."
         }
         if model.isWaitingForDisplay {
             return "The saved wallpaper is waiting for a configured display to reconnect."

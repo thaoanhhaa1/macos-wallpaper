@@ -250,7 +250,8 @@ Khi fallback được kích hoạt, phải:
 - Chưa kiểm tra manual Spaces, Mission Control, fullscreen, sleep/wake, hot-plug, Finder relaunch.
 - Chưa có persistence/bookmark, launch at login, sandbox, signing, notarization.
 - Multi-display mới ở mức enumerate và tạo surface theo display; chưa có UI mapping đầy đủ.
-- Surface chưa được tối ưu resource policy (pause on fullscreen/battery, thermal pressure).
+- Resource policy đã có (fullscreen/battery/Low Power Mode/sleep/thermal), nhưng chưa có soak test
+  dài hạn và chưa đo dropped frames trên phần cứng/1080p/4K thực tế.
 - `currentTime`/loop check phụ thuộc thời gian sleep của self-test; không phải phép đo chính xác
   về frame timing.
 

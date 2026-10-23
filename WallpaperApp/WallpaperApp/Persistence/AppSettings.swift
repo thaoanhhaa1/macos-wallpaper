@@ -1,7 +1,7 @@
 import Foundation
 
 struct AppSettings: Codable, Equatable {
-    static let currentSchemaVersion = 2
+    static let currentSchemaVersion = 3
 
     var schemaVersion: Int
     var launchAtLogin: Bool
@@ -47,6 +47,9 @@ struct AppSettings: Codable, Equatable {
         if schemaVersion < 2 {
             schemaVersion = 2
         }
+        if schemaVersion < 3 {
+            schemaVersion = 3
+        }
     }
 }
 
@@ -57,6 +60,7 @@ struct PlaybackSettings: Codable, Equatable {
     var scalingMode: ScalingMode
     var pauseOnFullscreen: Bool
     var pauseOnBattery: Bool
+    var pauseOnLowPowerMode: Bool
 
     init(
         isMuted: Bool = true,
@@ -64,7 +68,8 @@ struct PlaybackSettings: Codable, Equatable {
         loopEnabled: Bool = true,
         scalingMode: ScalingMode = .aspectFill,
         pauseOnFullscreen: Bool = false,
-        pauseOnBattery: Bool = false
+        pauseOnBattery: Bool = false,
+        pauseOnLowPowerMode: Bool = false
     ) {
         self.isMuted = isMuted
         self.volume = volume
@@ -72,6 +77,7 @@ struct PlaybackSettings: Codable, Equatable {
         self.scalingMode = scalingMode
         self.pauseOnFullscreen = pauseOnFullscreen
         self.pauseOnBattery = pauseOnBattery
+        self.pauseOnLowPowerMode = pauseOnLowPowerMode
     }
 
     init(from decoder: Decoder) throws {
@@ -82,6 +88,7 @@ struct PlaybackSettings: Codable, Equatable {
         scalingMode = try container.decodeIfPresent(ScalingMode.self, forKey: .scalingMode) ?? .aspectFill
         pauseOnFullscreen = try container.decodeIfPresent(Bool.self, forKey: .pauseOnFullscreen) ?? false
         pauseOnBattery = try container.decodeIfPresent(Bool.self, forKey: .pauseOnBattery) ?? false
+        pauseOnLowPowerMode = try container.decodeIfPresent(Bool.self, forKey: .pauseOnLowPowerMode) ?? false
     }
 }
 

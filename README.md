@@ -3,7 +3,7 @@
 Ứng dụng macOS native dùng video làm hình nền động. Repo hiện có hai phần:
 
 - `WallpaperSpike/` — feasibility spike của Pha 0.
-- `WallpaperApp/` — ứng dụng thật, hiện hoàn thành Pha 1, Pha 2, Pha 3, Pha 4 và Pha 5.
+- `WallpaperApp/` — ứng dụng thật, hiện hoàn thành Pha 1, Pha 2, Pha 3, Pha 4, Pha 5 và Pha 6.
 
 Quyết định kỹ thuật và bảng compatibility nằm trong [`FEASIBILITY.md`](FEASIBILITY.md);
 phạm vi các pha tiếp theo nằm trong [`PLAN.md`](PLAN.md).
@@ -145,6 +145,42 @@ launch at login.
 - Clear assignment của một display: chỉ display đó mất surface; các display khác giữ
   nguyên video.
 
+### Phạm vi Phase 6
+
+- `PerformanceMonitor` lấy mẫu CPU, memory footprint, GPU utilization (IOAccelerator) và
+  dropped frames/stalls từ `AVPlayerItem` access log mỗi 2 giây.
+- `ResourcePolicyMonitor` theo dõi fullscreen app, nguồn điện pin/AC, Low Power Mode,
+  display sleep, system sleep và thermal pressure. Điều kiện thay đổi sẽ pause/resume các
+  surface mà không tạo player mới.
+- Pause do resource policy tách khỏi pause thủ công: người dùng vẫn có thể Pause/Play, và
+  wallpaper chỉ tự resume khi policy hết điều kiện và người dùng không pause.
+- Settings có nhóm **Resource Management** để bật/tắt pause on fullscreen, pause on battery
+  và pause in Low Power Mode. Pause do sleep và thermal pressure luôn bật.
+- Playback lỗi trên surface được retry tối đa 2 lần với backoff; retry count reset sau 20
+  giây phát ổn định. Hết retry mới chuyển sang trạng thái lỗi.
+- Thay đổi mute/volume/scaling không tạo player mới; thay đổi loop chỉ rebuild player khi
+  thực sự cần. `setPlayer` và `AVPlayerLayer` bỏ qua cập nhật trùng.
+- Debug build có **Development Diagnostics** hiển thị metrics trực tiếp, trạng thái policy,
+  số player, dropped frames và nút Copy Diagnostics.
+- Copy Diagnostics bổ sung resource conditions, pause reasons, CPU/memory/GPU, dropped
+  frames, stalls và số surface player.
+
+### Kiểm tra resource management thủ công
+
+- Apply video 1080p rồi 4K, mở **Development Diagnostics**: CPU/GPU/memory và dropped
+  frames cập nhật; GPU có thể hiện `unavailable` trên một số máy.
+- Bật **Pause when a fullscreen app is active**, mở một app fullscreen: wallpaper pause
+  trong tối đa vài giây; thoát fullscreen: wallpaper resume.
+- Để máy chạy pin hoặc bật Low Power Mode với tùy chọn tương ứng: wallpaper pause và tự
+  resume khi cắm adapter/tắt Low Power Mode.
+- Cho display sleep hoặc system sleep rồi wake: playback pause và resume đúng.
+- Pause thủ công rồi thay đổi điều kiện policy: wallpaper không tự play lại khi policy hết.
+- Đổi mute/volume/scaling: số surface player không tăng và không có player dư thừa.
+- Làm file video mất quyền/đọc lỗi khi đang phát: log ghi retry có giới hạn, sau đó surface
+  chuyển sang trạng thái lỗi thay vì retry vô hạn.
+- **Copy Diagnostics** có các mục `Resource conditions`, `Pause reasons`, `Performance`,
+  `droppedFrames` và `stalls`.
+
 ### Kiểm tra playback thủ công
 
 Dùng **Choose Video…** hoặc **Preview Fixture** trong Settings, sau đó kiểm tra:
@@ -273,11 +309,11 @@ dù window vẫn hiển thị trên màn hình vật lý. Vì vậy:
   overlay (chấp nhận che icons) hoặc giới hạn ở màn hình chính; chi tiết trong
   `FEASIBILITY.md`.
 
-## Chưa nằm trong Phase 0–5
+## Chưa nằm trong Phase 0–6
 
 - Launch at login.
-- Resource policy (pause on fullscreen/battery/sleep tùy chọn).
 - Signing, sandbox, notarization.
-- Manual matrix còn lại cho Spaces, Mission Control, fullscreen và sleep/wake.
+- Automated soak test dài hạn và đo dropped frames trên phần cứng/1080p/4K thực tế.
+- Manual matrix còn lại cho Spaces, Mission Control và một số tổ hợp display/sleep/wake.
 
 Xem `PLAN.md` để biết phạm vi các pha tiếp theo.

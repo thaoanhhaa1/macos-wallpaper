@@ -17,6 +17,7 @@ final class AppModel {
             if oldValue.playback != settings.playback {
                 playback.apply(settings.playback)
                 wallpaper.update(settings: settings.playback)
+                reapplyResourcePolicy()
             }
 
             Log.settings.info("Settings updated schema=\(self.settings.schemaVersion, privacy: .public)")
@@ -25,6 +26,11 @@ final class AppModel {
 
     let playback = PlaybackEngine()
     let wallpaper = WallpaperSurfaceController()
+    let performanceMonitor = PerformanceMonitor()
+
+    private let resourcePolicyMonitor = ResourcePolicyMonitor()
+    private(set) var resourceConditions = ResourceConditions()
+    private(set) var resourcePauseReasons: Set<ResourcePauseReason> = []
 
     var selectedMedia: MediaReference?
     private(set) var selectedMediaURL: URL?
@@ -71,12 +77,28 @@ final class AppModel {
         }
         coordinator.start()
 
+        resourcePolicyMonitor.onChange = { [weak self] conditions in
+            self?.applyResourceConditions(conditions)
+        }
+        resourcePolicyMonitor.start()
+
+        performanceMonitor.droppedFramesProvider = { [weak self] in
+            guard let self else { return .zero }
+            if self.wallpaper.isActive {
+                return self.wallpaper.droppedFrameStats
+            }
+            return self.playback.droppedFrameStats()
+        }
+        performanceMonitor.start()
+
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
+                self?.resourcePolicyMonitor.stop()
+                self?.performanceMonitor.stop()
                 self?.playback.teardown()
                 self?.wallpaper.shutdown()
                 self?.stopAllMediaResources()
@@ -179,6 +201,9 @@ final class AppModel {
             let count = wallpaper.surfaceCount
             let suffix = count == 1 ? "" : "s"
             if wallpaper.isPaused {
+                if let pauseReasonSummary {
+                    return "Video wallpaper is paused on \(count) display\(suffix): \(pauseReasonSummary)."
+                }
                 return "Video wallpaper is applied to \(count) display\(suffix) and paused."
             }
             return "Video wallpaper is playing on \(count) display\(suffix)."
@@ -203,6 +228,33 @@ final class AppModel {
 
     var resourcePolicy: ResourcePolicy {
         ResourcePolicy(playback: settings.playback)
+    }
+
+    var isPolicyPaused: Bool {
+        !resourcePauseReasons.isEmpty
+    }
+
+    var pauseReasonSummary: String? {
+        var reasons = resourcePauseReasons
+        if wallpaper.isActive && wallpaper.isUserPaused {
+            reasons.insert(.user)
+        }
+        guard !reasons.isEmpty else { return nil }
+        return reasons
+            .sorted {
+                (ResourcePauseReason.allCases.firstIndex(of: $0) ?? 0)
+                    < (ResourcePauseReason.allCases.firstIndex(of: $1) ?? 0)
+            }
+            .map(\.title)
+            .joined(separator: ", ")
+    }
+
+    var performanceSample: PerformanceSample {
+        performanceMonitor.sample
+    }
+
+    var previewDroppedFrameStats: DroppedFrameStats {
+        playback.droppedFrameStats()
     }
 
     var developmentFixtureURL: URL? {
@@ -604,6 +656,13 @@ final class AppModel {
         displayConfigurations=\(settings.displayConfigurations.count)
         """
 
+        performanceMonitor.sampleNow()
+        let performance = performanceMonitor.sample
+        let performanceSummary = """
+        cpu=\(performance.cpuSummary) memory=\(performance.memorySummary) gpu=\(performance.gpuSummary)
+        droppedFrames=\(performance.droppedFrameSummary) stalls=\(performance.stalls)
+        """
+
         let report = """
         \(diagnostics.report)
         Displays:
@@ -613,9 +672,13 @@ final class AppModel {
         Settings schema: \(settings.schemaVersion)
         Surface strategy: \(surfaceStrategy.title)
         Resource policy: \(resourcePolicy.summary)
+        Resource conditions: \(resourceConditions.summary)
+        Pause reasons: \(pauseReasonSummary ?? "none")
+        Performance:
+        \(performanceSummary)
         Media: \(mediaSummary)
         Playback: \(playbackState.title)
-        Wallpaper: \(wallpaper.state.title) surfaces=\(wallpaper.surfaceCount) paused=\(wallpaper.isPaused)
+        Wallpaper: \(wallpaper.state.title) surfaces=\(wallpaper.surfaceCount) players=\(wallpaper.playerCount) paused=\(wallpaper.isPaused)
         Wallpaper media: \(wallpaper.appliedMediaName ?? "none")
         Persistence:
         \(persistenceSummary)
@@ -627,6 +690,19 @@ final class AppModel {
         pasteboard.clearContents()
         pasteboard.setString(report, forType: .string)
         Log.diagnostics.notice("Copied diagnostics report")
+    }
+
+    private func reapplyResourcePolicy() {
+        applyResourceConditions(resourcePolicyMonitor.conditions)
+    }
+
+    private func applyResourceConditions(_ conditions: ResourceConditions) {
+        resourceConditions = conditions
+        let reasons = resourcePolicy.pauseReasons(for: conditions)
+
+        guard reasons != resourcePauseReasons else { return }
+        resourcePauseReasons = reasons
+        wallpaper.setResourcePauseReasons(reasons)
     }
 
     private func handleDisplayConfigurationChange(_ newDisplays: [DisplayInfo]) {

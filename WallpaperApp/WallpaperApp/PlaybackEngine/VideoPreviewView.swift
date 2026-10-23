@@ -24,12 +24,18 @@ final class PlayerLayerView: NSView {
 
     var player: AVPlayer? {
         get { playerLayer.player }
-        set { playerLayer.player = newValue }
+        set {
+            guard playerLayer.player !== newValue else { return }
+            playerLayer.player = newValue
+        }
     }
 
     var videoGravity: AVLayerVideoGravity {
         get { playerLayer.videoGravity }
-        set { playerLayer.videoGravity = newValue }
+        set {
+            guard playerLayer.videoGravity != newValue else { return }
+            playerLayer.videoGravity = newValue
+        }
     }
 
     override init(frame frameRect: NSRect) {

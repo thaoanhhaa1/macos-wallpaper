@@ -12,8 +12,10 @@ struct SettingsView: View {
                 MediaCard(model: model)
                 WallpaperCard(model: model)
                 DisplaySettingsCard(model: model)
+                ResourcePolicyCard(model: model)
                 systemSection
                 developmentSection
+                diagnosticsSection
                 footer
             }
             .padding(22)
@@ -42,7 +44,7 @@ struct SettingsView: View {
 
             Spacer()
 
-            badge("PHASE 5")
+            badge("PHASE 6")
         }
     }
 
@@ -127,6 +129,13 @@ struct SettingsView: View {
         #endif
     }
 
+    @ViewBuilder
+    private var diagnosticsSection: some View {
+        #if DEBUG
+        SurfaceDiagnosticsView(model: model)
+        #endif
+    }
+
     private var footer: some View {
         VStack(alignment: .leading, spacing: 6) {
             Divider()
@@ -143,7 +152,7 @@ struct SettingsView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
-            Text("Phase 5: display lifecycle, stable per-display assignments, mirrored-display handling and reconnect without losing configuration.")
+            Text("Phase 6: resource metrics, fullscreen/battery/Low Power Mode policies, sleep and thermal handling, bounded playback retries and a development diagnostics view.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

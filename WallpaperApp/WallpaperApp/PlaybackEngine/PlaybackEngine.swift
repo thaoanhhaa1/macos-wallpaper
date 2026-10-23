@@ -23,9 +23,15 @@ final class PlaybackEngine {
     var hasLoadedMedia: Bool { loadedURL != nil }
 
     func apply(_ settings: PlaybackSettings) {
-        setMuted(settings.isMuted)
-        setVolume(settings.volume)
-        setLoopEnabled(settings.loopEnabled)
+        if isMuted != settings.isMuted {
+            setMuted(settings.isMuted)
+        }
+        if volume != Self.clamp(settings.volume) {
+            setVolume(settings.volume)
+        }
+        if isLooping != settings.loopEnabled {
+            setLoopEnabled(settings.loopEnabled)
+        }
     }
 
     func load(
@@ -173,6 +179,26 @@ final class PlaybackEngine {
         }
     }
 
+    func droppedFrameStats() -> DroppedFrameStats {
+        guard let events = player?.currentItem?.accessLog()?.events, !events.isEmpty else {
+            return .zero
+        }
+
+        return events.reduce(.zero) { result, event in
+            DroppedFrameStats(
+                droppedFrames: result.droppedFrames + event.numberOfDroppedVideoFrames,
+                stalls: result.stalls + event.numberOfStalls,
+                observedBitrate: event.observedBitrate > 0
+                    ? event.observedBitrate
+                    : result.observedBitrate,
+                indicatedBitrate: event.indicatedBitrate > 0
+                    ? event.indicatedBitrate
+                    : result.indicatedBitrate,
+                mediaRequests: result.mediaRequests + event.numberOfMediaRequests
+            )
+        }
+    }
+
     func teardown() {
         let wasLoaded = loadedURL != nil
 
@@ -216,7 +242,8 @@ final class PlaybackEngine {
         ) { [weak self] notification in
             let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
             Task { @MainActor in
-                self?.handleFailure(error)
+                guard let self, self.owns(notification.object) else { return }
+                self.handleFailure(error)
             }
         })
 
@@ -224,10 +251,11 @@ final class PlaybackEngine {
             forName: AVPlayerItem.playbackStalledNotification,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
+        ) { [weak self] notification in
             Task { @MainActor in
+                guard let self, self.owns(notification.object), self.isPlaying else { return }
                 Log.playback.error("Playback stalled")
-                self?.player?.play()
+                self.player?.play()
             }
         })
 
@@ -255,6 +283,12 @@ final class PlaybackEngine {
         state = .failed(reason)
         player?.pause()
         Log.playback.error("Playback failed: \(reason, privacy: .public)")
+    }
+
+    private func owns(_ object: Any?) -> Bool {
+        guard let item = object as? AVPlayerItem, let player else { return false }
+        if player.currentItem === item { return true }
+        return player.items().contains { $0 === item }
     }
 
     private static func clamp(_ value: Double) -> Double {

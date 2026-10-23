@@ -73,6 +73,7 @@ final class WallpaperSurfaceWindow: NSWindow {
     }
 
     func setPlayer(_ player: AVPlayer) {
+        guard renderer.player !== player else { return }
         renderer.player = player
     }
 
