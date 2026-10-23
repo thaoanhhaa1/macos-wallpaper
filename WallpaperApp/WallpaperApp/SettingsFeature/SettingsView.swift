@@ -10,6 +10,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 16) {
                 header
                 MediaCard(model: model)
+                WallpaperCard(model: model)
                 systemSection
                 developmentSection
                 footer
@@ -40,7 +41,7 @@ struct SettingsView: View {
 
             Spacer()
 
-            badge("PHASE 2")
+            badge("PHASE 3")
         }
     }
 
@@ -139,7 +140,7 @@ struct SettingsView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
-            Text("Phase 2: import, validation, preview and looping playback. Applying the video as the desktop wallpaper arrives in Phase 3.")
+            Text("Phase 3: apply, remove and restore a click-through video wallpaper behind desktop icons.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

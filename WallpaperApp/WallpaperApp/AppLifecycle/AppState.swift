@@ -29,3 +29,21 @@ enum WallpaperStatus: Equatable {
         return message
     }
 }
+
+extension WallpaperSurfaceState {
+    var title: String {
+        switch self {
+        case .inactive: "Not Applied"
+        case .active: "Applied"
+        case .failed: "Error"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .inactive: "display"
+        case .active: "play.rectangle.on.rectangle.fill"
+        case .failed: "exclamationmark.triangle.fill"
+        }
+    }
+}

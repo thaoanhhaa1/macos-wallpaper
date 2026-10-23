@@ -17,20 +17,26 @@ final class AppModel {
             if oldValue.playback != settings.playback {
                 playback.apply(settings.playback)
             }
+            if oldValue.playback != settings.playback || oldValue.displayMode != settings.displayMode {
+                wallpaper.update(settings: settings.playback, displayMode: settings.displayMode)
+            }
 
             Log.settings.info("Settings updated schema=\(self.settings.schemaVersion, privacy: .public)")
         }
     }
 
     let playback = PlaybackEngine()
+    let wallpaper = WallpaperSurfaceController()
 
     var selectedMedia: MediaReference?
+    private(set) var selectedMediaURL: URL?
+    private(set) var lastWallpaper: AppliedWallpaper?
     private(set) var mediaMetadata: MediaMetadata?
     private(set) var importState: MediaImportState = .idle
     private(set) var displays: [DisplayInfo]
 
     let diagnostics: AppDiagnostics
-    let surfaceStrategy = WallpaperSurfaceStrategy.behindDesktopIcons
+    var surfaceStrategy: WallpaperSurfaceStrategy { wallpaper.strategy }
 
     @ObservationIgnored private var terminationObserver: NSObjectProtocol?
 
@@ -49,6 +55,7 @@ final class AppModel {
 
         coordinator.onChange = { [weak self] displays in
             self?.displays = displays
+            self?.wallpaper.handleDisplayChange(displayMode: self?.settings.displayMode ?? .mainScreen)
         }
         coordinator.start()
 
@@ -59,6 +66,7 @@ final class AppModel {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.playback.teardown()
+                self?.wallpaper.shutdown()
             }
         }
 
@@ -70,8 +78,17 @@ final class AppModel {
     var playbackState: PlaybackState { playback.state }
     var isPlaying: Bool { playback.isPlaying }
     var hasMedia: Bool { selectedMedia != nil }
+    var hasLastWallpaper: Bool { lastWallpaper != nil }
+    var isWallpaperPlaying: Bool { wallpaper.isActive && !wallpaper.isPaused }
+    var effectiveIsPlaying: Bool { wallpaper.isActive ? isWallpaperPlaying : isPlaying }
 
     var status: WallpaperStatus {
+        if let failure = wallpaper.state.failureReason {
+            return .error(failure)
+        }
+        if wallpaper.isActive {
+            return wallpaper.isPaused ? .paused : .playing
+        }
         if let failure = playback.state.failureReason {
             return .error(failure)
         }
@@ -96,6 +113,17 @@ final class AppModel {
     }
 
     var statusDetail: String {
+        if let failure = wallpaper.state.failureReason {
+            return failure
+        }
+        if wallpaper.isActive {
+            let count = wallpaper.surfaceCount
+            let suffix = count == 1 ? "" : "s"
+            if wallpaper.isPaused {
+                return "Video wallpaper is applied to \(count) display\(suffix) and paused."
+            }
+            return "Video wallpaper is playing on \(count) display\(suffix)."
+        }
         if case .failed = playback.state, selectedMedia != nil {
             return playback.state.failureReason ?? "Playback failed."
         }
@@ -138,6 +166,7 @@ final class AppModel {
                 autoplay: true
             )
             selectedMedia = selection.reference
+            selectedMediaURL = selection.url
             mediaMetadata = selection.metadata
             importState = .idle
             Log.media.notice(
@@ -172,6 +201,65 @@ final class AppModel {
         settings.playback.isMuted.toggle()
     }
 
+    func toggleEffectivePlayback() {
+        if wallpaper.isActive {
+            wallpaper.togglePlayback()
+        } else {
+            playback.togglePlayPause()
+        }
+    }
+
+    func applyWallpaper() {
+        guard let url = selectedMediaURL else { return }
+        let name = selectedMedia?.displayName ?? url.lastPathComponent
+
+        do {
+            try wallpaper.apply(
+                url: url,
+                displayName: name,
+                settings: settings.playback,
+                displayMode: settings.displayMode
+            )
+            lastWallpaper = AppliedWallpaper(
+                url: url,
+                displayName: name,
+                displayMode: settings.displayMode
+            )
+            Log.surface.notice(
+                "Applied wallpaper \(name, privacy: .public) mode=\(self.settings.displayMode.rawValue, privacy: .public)"
+            )
+        } catch {
+            Log.surface.error(
+                "Apply failed for \(name, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
+        }
+    }
+
+    func removeWallpaper() {
+        wallpaper.remove()
+        Log.surface.notice("Removed wallpaper; the desktop picture is visible again")
+    }
+
+    func restoreLastWallpaper() {
+        guard let lastWallpaper else { return }
+
+        do {
+            try wallpaper.apply(
+                url: lastWallpaper.url,
+                displayName: lastWallpaper.displayName,
+                settings: settings.playback,
+                displayMode: settings.displayMode
+            )
+            Log.surface.notice(
+                "Restored wallpaper \(lastWallpaper.displayName, privacy: .public)"
+            )
+        } catch {
+            Log.surface.error(
+                "Restore failed for \(lastWallpaper.displayName, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
+        }
+    }
+
     func seek(to seconds: Double) {
         playback.seek(to: seconds)
     }
@@ -204,6 +292,9 @@ final class AppModel {
         Resource policy: \(resourcePolicy.summary)
         Media: \(mediaSummary)
         Playback: \(playbackState.title)
+        Wallpaper: \(wallpaper.state.title) surfaces=\(wallpaper.surfaceCount) paused=\(wallpaper.isPaused)
+        Wallpaper media: \(lastWallpaper?.displayName ?? "none")
+        Surface windows: \(wallpaper.surfaceWindowNumbers.map(String.init).joined(separator: ", "))
         Import state: \(importState.diagnosticSummary)
         """
 
@@ -212,6 +303,12 @@ final class AppModel {
         pasteboard.setString(report, forType: .string)
         Log.diagnostics.notice("Copied diagnostics report")
     }
+}
+
+struct AppliedWallpaper: Equatable {
+    let url: URL
+    let displayName: String
+    let displayMode: DisplayMode
 }
 
 private extension MediaImportState {

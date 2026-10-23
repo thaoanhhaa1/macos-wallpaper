@@ -3,7 +3,7 @@
 Ứng dụng macOS native dùng video làm hình nền động. Repo hiện có hai phần:
 
 - `WallpaperSpike/` — feasibility spike của Pha 0.
-- `WallpaperApp/` — ứng dụng thật, hiện hoàn thành Pha 1 và Pha 2.
+- `WallpaperApp/` — ứng dụng thật, hiện hoàn thành Pha 1, Pha 2 và Pha 3.
 
 Quyết định kỹ thuật và bảng compatibility nằm trong [`FEASIBILITY.md`](FEASIBILITY.md);
 phạm vi các pha tiếp theo nằm trong [`PLAN.md`](PLAN.md).
@@ -46,8 +46,34 @@ thuộc Pha 8.
 - `OSLog` subsystem và quy ước log.
 - Fixture video nhỏ cho development/test, xem trực tiếp từ mục Development.
 
-Chưa nằm trong Phase 2: apply/remove wallpaper surface, persistence của media đã chọn,
-multi-display configuration UI, launch at login.
+Chưa nằm trong Phase 2: persistence của media đã chọn, multi-display configuration UI,
+launch at login.
+
+### Phạm vi Phase 3
+
+- Surface controller tạo borderless window ở `desktopIconWindow − 1` cho display đang chọn,
+  dùng `NSScreen.frame` theo strategy đã xác minh ở Pha 0.
+- `collectionBehavior` gồm `canJoinAllSpaces`, `stationary`, `ignoresCycle`,
+  `fullScreenNone`; window không nhận key/main focus và bỏ qua mouse events.
+- Playback của surface tách khỏi rendering: một `SurfacePlayback` dùng chung cho các
+  surface, mỗi window chỉ gắn `AVPlayerLayer`.
+- Apply / Remove / Restore Last Wallpaper có trong Settings và menu bar.
+- Settings playback (mute, volume, loop, scaling) được áp dụng lại cho surface.
+- Surface tự cập nhật frame khi display thay đổi và re-assert ordering khi app activate,
+  Finder activate hoặc Finder relaunch.
+- Copy Diagnostics có thêm trạng thái surface, số window và display mode.
+
+### Kiểm tra wallpaper surface thủ công
+
+- Chọn video, bấm **Apply as Wallpaper**: video nằm sau desktop icons, trên system
+  wallpaper; desktop icons vẫn select/drag/right-click được.
+- **Remove Wallpaper**: surface biến mất, desktop picture hiện lại; **Restore Last
+  Wallpaper** áp dụng lại video vừa gỡ.
+- Chuyển Space, mở Mission Control và một app fullscreen: surface không chen lên trên.
+- Relaunch Finder (`killall Finder`), Cmd+Tab và activate/deactivate app: ordering giữ
+  nguyên.
+- Đổi scaling, mute/volume và loop trong Settings: surface cập nhật theo.
+- Cắm/rút display và thay đổi resolution: surface giữ đúng frame.
 
 ### Kiểm tra playback thủ công
 
@@ -177,10 +203,9 @@ dù window vẫn hiển thị trên màn hình vật lý. Vì vậy:
   overlay (chấp nhận che icons) hoặc giới hạn ở màn hình chính; chi tiết trong
   `FEASIBILITY.md`.
 
-## Chưa nằm trong Phase 0–2
+## Chưa nằm trong Phase 0–3
 
-- Apply/remove wallpaper surface và restore last wallpaper.
-- Persistence, security-scoped bookmark khi khôi phục, launch at login.
+- Persistence, security-scoped bookmark khi khôi phục sau khi relaunch, launch at login.
 - Multi-display configuration UI đầy đủ.
 - Resource policy (pause on fullscreen/battery/sleep tùy chọn).
 - Signing, sandbox, notarization.

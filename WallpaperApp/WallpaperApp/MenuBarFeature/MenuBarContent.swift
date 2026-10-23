@@ -11,20 +11,37 @@ struct MenuBarContent: View {
 
         Divider()
 
-        Button(model.isPlaying ? "Pause" : "Play") {
-            model.togglePlayPause()
+        Button(model.effectiveIsPlaying ? "Pause" : "Play") {
+            model.toggleEffectivePlayback()
         }
-        .disabled(!model.hasMedia)
+        .disabled(!model.hasMedia && !model.wallpaper.isActive)
 
         Button(model.settings.playback.isMuted ? "Unmute" : "Mute") {
             model.toggleMute()
         }
-        .disabled(!model.hasMedia)
+        .disabled(!model.hasMedia && !model.wallpaper.isActive)
 
         Button("Choose Video…") {
             Task { await model.chooseVideo() }
         }
         .disabled(model.importState == .importing)
+
+        Divider()
+
+        Button("Apply as Wallpaper") {
+            model.applyWallpaper()
+        }
+        .disabled(!model.hasMedia || model.wallpaper.isActive)
+
+        Button("Remove Wallpaper") {
+            model.removeWallpaper()
+        }
+        .disabled(!model.wallpaper.isActive && model.wallpaper.state.failureReason == nil)
+
+        Button("Restore Last Wallpaper") {
+            model.restoreLastWallpaper()
+        }
+        .disabled(!model.hasLastWallpaper || model.wallpaper.isActive)
 
         Divider()
 

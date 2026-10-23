@@ -270,12 +270,7 @@ struct MediaCard: View {
     }
 
     private var videoGravity: AVLayerVideoGravity {
-        switch model.settings.playback.scalingMode {
-        case .aspectFill, .centerCrop:
-            .resizeAspectFill
-        case .aspectFit:
-            .resizeAspect
-        }
+        model.settings.playback.scalingMode.videoGravity
     }
 
     private var seekBinding: Binding<Double> {
