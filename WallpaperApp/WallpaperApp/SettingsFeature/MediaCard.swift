@@ -176,54 +176,37 @@ struct MediaCard: View {
     }
 
     private var controls: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 10) {
-                Button {
-                    model.togglePlayPause()
-                } label: {
-                    Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
-                        .frame(width: 16)
-                }
-                .help(model.isPlaying ? "Pause" : "Play")
-
-                Button {
-                    model.restart()
-                } label: {
-                    Image(systemName: "gobackward")
-                }
-                .help("Restart from the beginning")
-
-                Text(TimecodeFormatter.string(from: model.playback.currentTime))
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-
-                Slider(value: seekBinding, in: 0...max(model.playback.duration, 0.1))
-                    .disabled(model.playback.duration <= 0)
-                    .accessibilityLabel("Playback position")
-
-                Text(TimecodeFormatter.string(from: model.playback.duration))
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-
-                Button {
-                    model.toggleMute()
-                } label: {
-                    Image(systemName: model.settings.playback.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                }
-                .help(model.settings.playback.isMuted ? "Unmute" : "Mute")
-
-                Slider(value: volumeBinding, in: 0...1)
-                    .frame(width: 90)
-                    .disabled(model.settings.playback.isMuted)
-                    .accessibilityLabel("Volume")
-
-                Toggle("Loop", isOn: loopBinding)
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .help("Restart automatically when the video reaches the end")
+        HStack(spacing: 10) {
+            Button {
+                model.togglePlayPause()
+            } label: {
+                Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
+                    .frame(width: 16)
             }
+            .help(model.isPlaying ? "Pause" : "Play")
+            .accessibilityLabel(model.isPlaying ? "Pause preview" : "Play preview")
+
+            Button {
+                model.restart()
+            } label: {
+                Image(systemName: "gobackward")
+            }
+            .help("Restart from the beginning")
+            .accessibilityLabel("Restart preview from the beginning")
+
+            Text(TimecodeFormatter.string(from: model.playback.currentTime))
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+
+            Slider(value: seekBinding, in: 0...max(model.playback.duration, 0.1))
+                .disabled(model.playback.duration <= 0)
+                .accessibilityLabel("Playback position")
+
+            Text(TimecodeFormatter.string(from: model.playback.duration))
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
         }
     }
 
@@ -257,7 +240,7 @@ struct MediaCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("No wallpaper selected")
                     .font(.title3.weight(.semibold))
-                Text("Choose a video to preview it here. Playback starts automatically and cleanup happens when you replace it.")
+                Text("Choose a video or drop it anywhere in this window to preview it. Playback starts automatically and cleanup happens when you replace it.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -354,17 +337,4 @@ struct MediaCard: View {
         )
     }
 
-    private var volumeBinding: Binding<Double> {
-        Binding(
-            get: { model.settings.playback.volume },
-            set: { model.settings.playback.volume = $0 }
-        )
-    }
-
-    private var loopBinding: Binding<Bool> {
-        Binding(
-            get: { model.settings.playback.loopEnabled },
-            set: { model.settings.playback.loopEnabled = $0 }
-        )
-    }
 }

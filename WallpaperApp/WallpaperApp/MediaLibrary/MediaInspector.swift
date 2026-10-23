@@ -50,9 +50,9 @@ enum MediaImportError: LocalizedError, Equatable {
         case .fileMissing:
             "The selected file no longer exists."
         case .fileUnreadable:
-            "The app doesn't have permission to read this file. Choose it again from the open panel."
+            "The app doesn't have permission to read this file. Choose it again with Choose Video… to grant access."
         case .notPlayable:
-            "This video can't be played. Its codec may be unsupported; try H.264 or HEVC in an MP4 or MOV file."
+            "This video format or codec isn't supported. Try H.264 or HEVC video in an MP4 or MOV file."
         case .noVideoTrack:
             "This file doesn't contain a video track."
         case .bookmarkCreationFailed(let message):

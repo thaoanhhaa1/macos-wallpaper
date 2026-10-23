@@ -78,7 +78,7 @@ struct WallpaperCard: View {
 
             if model.wallpaper.isActive {
                 Text(model.wallpaper.isPaused ? "PAUSED" : "PLAYING")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.caption2.weight(.bold))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(Color.accentColor.opacity(0.16))

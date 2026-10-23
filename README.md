@@ -3,7 +3,7 @@
 Ứng dụng macOS native dùng video làm hình nền động. Repo hiện có hai phần:
 
 - `WallpaperSpike/` — feasibility spike của Pha 0.
-- `WallpaperApp/` — ứng dụng thật, hiện hoàn thành Pha 1, Pha 2, Pha 3, Pha 4, Pha 5 và Pha 6.
+- `WallpaperApp/` — ứng dụng thật, hiện hoàn thành Pha 1, Pha 2, Pha 3, Pha 4, Pha 5, Pha 6 và Pha 7.
 
 Quyết định kỹ thuật và bảng compatibility nằm trong [`FEASIBILITY.md`](FEASIBILITY.md);
 phạm vi các pha tiếp theo nằm trong [`PLAN.md`](PLAN.md).
@@ -180,6 +180,37 @@ launch at login.
   chuyển sang trạng thái lỗi thay vì retry vô hạn.
 - **Copy Diagnostics** có các mục `Resource conditions`, `Pause reasons`, `Performance`,
   `droppedFrames` và `stalls`.
+
+### Phạm vi Phase 7
+
+- Settings chia thành ba nhóm native **General**, **Playback** và **Displays** bằng `TabView`,
+  dùng control chuẩn của macOS và hỗ trợ keyboard navigation.
+- **General** gồm chọn/preview video, apply/remove/restore wallpaper và **Recent Videos**.
+- **Playback** gồm loop, mute, volume, scaling (**Aspect fit**, **Aspect fill**,
+  **Center crop**) và resource policy; thay đổi áp dụng ngay cho preview và surface.
+- Có thể kéo-thả file video vào cửa sổ Settings; overlay hiển thị định dạng được hỗ trợ.
+- **Recent Videos** lưu tối đa 8 video gần nhất bằng security-scoped bookmark, cho phép
+  preview lại và **Remove** từng item; danh sách cũng có trong menu bar.
+- `AppSettings` schema v4 thêm `recentMedia` và migrate tự động từ schema cũ.
+- VoiceOver labels cho preview, scaling, display target và recent items; font dùng text
+  style để tôn trọng kích thước chữ của hệ thống; lỗi permission/missing file/unsupported
+  format có copy hướng dẫn cụ thể.
+- Surface vẫn click-through nên khi Settings đóng, desktop icons và cửa sổ không bị chặn.
+
+### Kiểm tra Phase 7 thủ công
+
+- Mở Settings: chuyển giữa General, Playback và Displays bằng chuột và bằng keyboard.
+- Kéo một file MP4/MOV vào bất kỳ tab nào: overlay drop hiện ra và video được validate,
+  preview tự phát.
+- Đổi **Aspect fit**, **Aspect fill**, **Center crop**: preview và wallpaper surface đổi
+  cách hiển thị ngay, không tạo thêm player.
+- Import vài video rồi mở **Recent Videos**: item mới nhất ở đầu, **Preview** phát lại,
+  **Remove** xóa đúng item; thoát/mở lại app danh sách vẫn còn.
+- Kéo/xóa file của một recent item rồi bấm **Preview**: lỗi xuất hiện rõ ràng và item vẫn
+  có thể Remove.
+- Bật VoiceOver: các nút play/pause, scaling, display target, recent preview/remove đều
+  đọc được label và trạng thái.
+- Đóng Settings, thao tác desktop icons và cửa sổ ứng dụng khác bình thường.
 
 ### Kiểm tra playback thủ công
 

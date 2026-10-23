@@ -5,46 +5,114 @@ import SwiftUI
 struct SettingsView: View {
     let model: AppModel
 
+    @State private var isDropTargeted = false
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                header
-                MediaCard(model: model)
-                WallpaperCard(model: model)
-                DisplaySettingsCard(model: model)
-                ResourcePolicyCard(model: model)
-                systemSection
-                developmentSection
-                diagnosticsSection
-                footer
-            }
-            .padding(22)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        TabView {
+            generalPage
+                .tabItem {
+                    Label("General", systemImage: "gearshape")
+                }
+
+            playbackPage
+                .tabItem {
+                    Label("Playback", systemImage: "play.rectangle")
+                }
+
+            displaysPage
+                .tabItem {
+                    Label("Displays", systemImage: "display")
+                }
         }
-        .frame(minWidth: 640, minHeight: 560)
+        .frame(minWidth: 700, minHeight: 620)
         .background(Color(nsColor: .windowBackgroundColor))
+        .dropDestination(for: URL.self) { urls, _ in
+            guard let url = urls.first(where: { $0.isFileURL && !$0.hasDirectoryPath }) else {
+                return false
+            }
+            Task { await model.openDroppedVideo(at: url) }
+            return true
+        } isTargeted: { isTargeted in
+            isDropTargeted = isTargeted
+        }
+        .overlay {
+            if isDropTargeted {
+                dropOverlay
+            }
+        }
         .onAppear {
             Log.settings.notice("Settings window appeared")
         }
     }
 
-    private var header: some View {
+    private var generalPage: some View {
+        settingsPage(
+            subtitle: "Choose a video, apply it to the desktop, and revisit recent media.",
+            systemImage: "play.rectangle.on.rectangle.fill"
+        ) {
+            MediaCard(model: model)
+            WallpaperCard(model: model)
+            RecentVideosCard(model: model)
+            developmentSection
+            diagnosticsSection
+        }
+    }
+
+    private var playbackPage: some View {
+        settingsPage(
+            subtitle: "Control looping, audio, scaling, and when playback pauses.",
+            systemImage: "play.rectangle"
+        ) {
+            PlaybackSettingsCard(model: model)
+            ResourcePolicyCard(model: model)
+        }
+    }
+
+    private var displaysPage: some View {
+        settingsPage(
+            subtitle: "Choose which displays show a wallpaper and how many surfaces are created.",
+            systemImage: "display"
+        ) {
+            DisplaySettingsCard(model: model)
+            systemSection
+        }
+    }
+
+    private func settingsPage<Content: View>(
+        subtitle: String,
+        systemImage: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                header(subtitle: subtitle, systemImage: systemImage)
+                content()
+                footer
+            }
+            .padding(22)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func header(subtitle: String, systemImage: String) -> some View {
         HStack(alignment: .center, spacing: 14) {
-            Image(systemName: "play.rectangle.on.rectangle.fill")
+            Image(systemName: systemImage)
                 .font(.system(size: 36, weight: .regular))
                 .foregroundStyle(.tint)
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Wallpaper")
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
-                Text("Video wallpaper for macOS")
+                    .font(.system(.title, design: .rounded).weight(.bold))
+                Text(subtitle)
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Spacer()
+            Spacer(minLength: 12)
 
-            badge("PHASE 6")
+            badge("PHASE 7")
         }
     }
 
@@ -152,19 +220,52 @@ struct SettingsView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
-            Text("Phase 6: resource metrics, fullscreen/battery/Low Power Mode policies, sleep and thermal handling, bounded playback retries and a development diagnostics view.")
+            Text("Phase 7: grouped settings, keyboard-friendly native controls, drag-and-drop, recent videos, scaling previews and clearer permission/format messages.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
     }
 
+    private var dropOverlay: some View {
+        ZStack {
+            Color.accentColor.opacity(0.08)
+
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(
+                    Color.accentColor,
+                    style: StrokeStyle(lineWidth: 3, dash: [9, 7])
+                )
+                .padding(18)
+
+            VStack(spacing: 8) {
+                Image(systemName: "arrow.down.doc.fill")
+                    .font(.system(size: 38, weight: .regular))
+                    .foregroundStyle(.tint)
+                    .accessibilityHidden(true)
+                Text("Drop video to preview")
+                    .font(.title3.weight(.semibold))
+                Text(MediaImporter.supportedFormatsDescription)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(22)
+            .background(
+                .regularMaterial,
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            )
+        }
+        .allowsHitTesting(false)
+        .transition(.opacity)
+    }
+
     private func badge(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 9, weight: .bold))
+            .font(.caption2.weight(.bold))
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(Color.accentColor.opacity(0.16))
             .foregroundStyle(Color.accentColor)
             .clipShape(Capsule())
+            .accessibilityLabel("Version \(text)")
     }
 }

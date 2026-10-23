@@ -1,7 +1,7 @@
 import Foundation
 
 struct AppSettings: Codable, Equatable {
-    static let currentSchemaVersion = 3
+    static let currentSchemaVersion = 4
 
     var schemaVersion: Int
     var launchAtLogin: Bool
@@ -9,6 +9,9 @@ struct AppSettings: Codable, Equatable {
     var displayMode: DisplayMode
     var wallpaper: PersistedWallpaperState
     var displayConfigurations: [String: DisplayWallpaperConfiguration]
+    var recentMedia: [MediaReference]
+
+    static let maximumRecentMediaCount = 8
 
     init(
         schemaVersion: Int = AppSettings.currentSchemaVersion,
@@ -16,7 +19,8 @@ struct AppSettings: Codable, Equatable {
         playback: PlaybackSettings = PlaybackSettings(),
         displayMode: DisplayMode = .mainScreen,
         wallpaper: PersistedWallpaperState = PersistedWallpaperState(),
-        displayConfigurations: [String: DisplayWallpaperConfiguration] = [:]
+        displayConfigurations: [String: DisplayWallpaperConfiguration] = [:],
+        recentMedia: [MediaReference] = []
     ) {
         self.schemaVersion = schemaVersion
         self.launchAtLogin = launchAtLogin
@@ -24,6 +28,7 @@ struct AppSettings: Codable, Equatable {
         self.displayMode = displayMode
         self.wallpaper = wallpaper
         self.displayConfigurations = displayConfigurations
+        self.recentMedia = recentMedia
     }
 
     init(from decoder: Decoder) throws {
@@ -41,6 +46,8 @@ struct AppSettings: Codable, Equatable {
             [String: DisplayWallpaperConfiguration].self,
             forKey: .displayConfigurations
         ) ?? [:]
+        recentMedia = try container.decodeIfPresent([MediaReference].self, forKey: .recentMedia)
+            ?? []
     }
 
     mutating func migrateToCurrentVersion() {
@@ -49,6 +56,9 @@ struct AppSettings: Codable, Equatable {
         }
         if schemaVersion < 3 {
             schemaVersion = 3
+        }
+        if schemaVersion < 4 {
+            schemaVersion = 4
         }
     }
 }

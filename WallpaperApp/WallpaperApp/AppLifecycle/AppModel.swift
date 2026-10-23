@@ -119,6 +119,7 @@ final class AppModel {
     var hasMedia: Bool { selectedMedia != nil }
     var hasLastWallpaper: Bool { settings.wallpaper.last != nil }
     var lastWallpaperName: String? { settings.wallpaper.last?.media.displayName }
+    var recentMedia: [MediaReference] { settings.recentMedia }
     var persistedDisplayConfigurationCount: Int { settings.displayConfigurations.count }
     var isWallpaperPlaying: Bool { wallpaper.isActive && !wallpaper.isPaused }
     var effectiveIsPlaying: Bool { wallpaper.isActive ? isWallpaperPlaying : isPlaying }
@@ -282,13 +283,15 @@ final class AppModel {
                 settings: settings.playback,
                 autoplay: true
             )
-            selectedMedia = selection.reference
+            let media = mediaCache[selection.reference.identifier]?.reference ?? selection.reference
+            selectedMedia = media
             selectedMediaURL = selection.url
             mediaMetadata = selection.metadata
             importState = .idle
+            recordRecentMedia(media)
             stopUnusedMedia(keeping: wallpaper.appliedMediaIdentifiers)
             Log.media.notice(
-                "Import ready for \(selection.reference.displayName, privacy: .public) duration=\(selection.metadata.duration, privacy: .public)"
+                "Import ready for \(media.displayName, privacy: .public) duration=\(selection.metadata.duration, privacy: .public)"
             )
         } catch {
             importState = .failed(error.localizedDescription)
@@ -296,6 +299,54 @@ final class AppModel {
                 "Import failed for \(url.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)"
             )
         }
+    }
+
+    func openDroppedVideo(at url: URL) async {
+        guard url.isFileURL, !url.hasDirectoryPath else {
+            importState = .failed("Drop a video file such as an MP4 or MOV, not a folder.")
+            Log.media.error("Rejected non-file drop")
+            return
+        }
+        await openVideo(at: url)
+    }
+
+    func openRecentVideo(_ reference: MediaReference) async {
+        guard importState != .importing else { return }
+        importState = .importing
+        Log.media.notice("Opening recent video \(reference.displayName, privacy: .public)")
+
+        do {
+            let selection = try await activateMedia(reference: reference)
+            try playback.load(
+                url: selection.url,
+                duration: selection.metadata.duration,
+                settings: settings.playback,
+                autoplay: true
+            )
+            let media = mediaCache[selection.reference.identifier]?.reference ?? selection.reference
+            selectedMedia = media
+            selectedMediaURL = selection.url
+            mediaMetadata = selection.metadata
+            importState = .idle
+            recordRecentMedia(media)
+            stopUnusedMedia(keeping: wallpaper.appliedMediaIdentifiers)
+            Log.media.notice(
+                "Recent video ready for \(media.displayName, privacy: .public) duration=\(selection.metadata.duration, privacy: .public)"
+            )
+        } catch {
+            importState = .failed(error.localizedDescription)
+            Log.media.error(
+                "Recent video failed for \(reference.displayName, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
+        }
+    }
+
+    func removeRecentMedia(_ reference: MediaReference) {
+        guard settings.recentMedia.contains(where: { $0.identifier == reference.identifier }) else {
+            return
+        }
+        settings.recentMedia.removeAll { $0.identifier == reference.identifier }
+        Log.media.notice("Removed recent video \(reference.displayName, privacy: .public)")
     }
 
     func relinkMissingVideo() async {
@@ -322,12 +373,12 @@ final class AppModel {
                 settings: settings.playback,
                 autoplay: false
             )
-            selectedMedia = selection.reference
+            let media = mediaCache[selection.reference.identifier]?.reference ?? selection.reference
+            selectedMedia = media
             selectedMediaURL = selection.url
             mediaMetadata = selection.metadata
             stopUnusedMedia(keeping: wallpaper.appliedMediaIdentifiers)
 
-            let media = mediaCache[selection.reference.identifier]?.reference ?? selection.reference
             let previous = settings
 
             do {
@@ -375,6 +426,7 @@ final class AppModel {
                 }
 
                 importState = .idle
+                recordRecentMedia(media)
                 Log.persistence.notice(
                     "Relinked wallpaper \(media.displayName, privacy: .public)"
                 )
@@ -654,6 +706,7 @@ final class AppModel {
         bookmarkBytes=\(selectedMedia?.bookmarkData.count ?? 0)
         displayMode=\(settings.displayMode.rawValue)
         displayConfigurations=\(settings.displayConfigurations.count)
+        recentMedia=\(settings.recentMedia.count)
         """
 
         performanceMonitor.sampleNow()
@@ -909,6 +962,26 @@ final class AppModel {
         displays.first(where: { $0.persistentID == persistentID })?.name
             ?? settings.displayConfigurations[persistentID]?.displayName
             ?? "Display"
+    }
+
+    private func recordRecentMedia(_ reference: MediaReference) {
+        var updated = reference
+        updated.identifier = settings.recentMedia.first(where: {
+            $0.displayName.caseInsensitiveCompare(reference.displayName) == .orderedSame
+                && $0.lastKnownDuration == reference.lastKnownDuration
+        })?.identifier ?? reference.identifier
+
+        settings.recentMedia.removeAll {
+            $0.identifier == updated.identifier
+                || ($0.displayName.caseInsensitiveCompare(updated.displayName) == .orderedSame
+                    && $0.lastKnownDuration == updated.lastKnownDuration)
+        }
+        settings.recentMedia.insert(updated, at: 0)
+        if settings.recentMedia.count > AppSettings.maximumRecentMediaCount {
+            settings.recentMedia = Array(
+                settings.recentMedia.prefix(AppSettings.maximumRecentMediaCount)
+            )
+        }
     }
 
     private func restorePersistedWallpaper() async {

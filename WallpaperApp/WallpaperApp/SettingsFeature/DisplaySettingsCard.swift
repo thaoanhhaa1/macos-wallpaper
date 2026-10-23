@@ -90,6 +90,8 @@ struct DisplaySettingsCard: View {
             }
             .buttonStyle(.plain)
             .help("Use this display as the Apply target")
+            .accessibilityLabel("Apply target: \(display.name)")
+            .accessibilityValue(isTarget ? "Selected" : "Not selected")
             .disabled(display.isMirrored)
 
             Image(systemName: display.isMirrored ? "rectangle.on.rectangle" : "display")
@@ -159,6 +161,8 @@ struct DisplaySettingsCard: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.secondary.opacity(isTarget ? 0.10 : 0.05))
         )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(display.name) display")
     }
 
     private func disconnectedRow(_ entry: DisconnectedDisplayConfiguration) -> some View {
@@ -221,7 +225,7 @@ struct DisplaySettingsCard: View {
 
     private func badge(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 9, weight: .bold))
+            .font(.caption2.weight(.bold))
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(Color.accentColor.opacity(0.16))

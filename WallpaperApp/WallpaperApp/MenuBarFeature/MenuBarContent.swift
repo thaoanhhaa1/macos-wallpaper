@@ -26,6 +26,23 @@ struct MenuBarContent: View {
         }
         .disabled(model.importState == .importing)
 
+        if !model.recentMedia.isEmpty {
+            Menu("Recent Videos") {
+                ForEach(model.recentMedia.prefix(6)) { reference in
+                    Button {
+                        Task { await model.openRecentVideo(reference) }
+                    } label: {
+                        if model.selectedMedia?.identifier == reference.identifier {
+                            Label(reference.displayName, systemImage: "checkmark")
+                        } else {
+                            Text(reference.displayName)
+                        }
+                    }
+                    .disabled(model.importState == .importing)
+                }
+            }
+        }
+
         if model.missingWallpaper != nil {
             Button("Relink Missing Video…") {
                 Task { await model.relinkMissingVideo() }
