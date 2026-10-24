@@ -3,5 +3,5 @@ set -euo pipefail
 
 /usr/bin/log stream \
   --style compact \
-  --predicate 'subsystem == "com.local.wallpaperapp"' \
+  --predicate 'subsystem == "com.tcs.wallpaper"' \
   --level debug

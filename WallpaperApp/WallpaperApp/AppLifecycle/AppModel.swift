@@ -837,6 +837,17 @@ final class AppModel {
 
         if previous.contains(.screenLocked) && !reasons.contains(.screenLocked) {
             wallpaper.reassertOrdering()
+            if settings.syncLockScreen {
+                Task { @MainActor [weak self] in
+                    // Allow macOS unlock session transition to settle, then ensure WallpaperAgent is fresh
+                    try? await Task.sleep(nanoseconds: 800_000_000)
+                    self?.lockScreen.ensureHealthy(restartAgentIfNeeded: true)
+                }
+            }
+        } else if !previous.contains(.screenLocked) && reasons.contains(.screenLocked) {
+            if settings.syncLockScreen {
+                lockScreen.ensureHealthy(restartAgentIfNeeded: false)
+            }
         }
     }
 
@@ -847,6 +858,10 @@ final class AppModel {
         let removed = previousIDs.subtracting(currentIDs)
 
         displays = newDisplays
+
+        if settings.syncLockScreen {
+            lockScreen.ensureHealthy(restartAgentIfNeeded: false)
+        }
 
         if let selectedDisplayPersistentID,
            !currentIDs.contains(selectedDisplayPersistentID) {

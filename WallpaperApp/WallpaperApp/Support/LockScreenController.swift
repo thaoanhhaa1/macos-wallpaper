@@ -21,6 +21,18 @@ final class LockScreenController {
     private var entriesPath: String { aerialsBase + "/manifest/entries.json" }
     private var storePath: String { homeDirectory + "/Library/Application Support/com.apple.wallpaper/Store/Index.plist" }
 
+    private init() {
+        checkInitialSyncState()
+    }
+
+    private func checkInitialSyncState() {
+        let destVideoURL = URL(fileURLWithPath: videosDir + "/\(assetID).mov")
+        let fm = FileManager.default
+        if fm.fileExists(atPath: destVideoURL.path) && fm.fileExists(atPath: entriesPath) {
+            isSynced = true
+        }
+    }
+
     func sync(videoURL: URL, displayName: String) async {
         let fm = FileManager.default
 
@@ -31,20 +43,14 @@ final class LockScreenController {
         let destVideoURL = URL(fileURLWithPath: videosDir + "/\(assetID).mov")
         let destThumbURL = URL(fileURLWithPath: thumbsDir + "/\(assetID).png")
 
-        // 2. Copy video file if needed
-        let srcSize = (try? fm.attributesOfItem(atPath: videoURL.path)[.size] as? Int) ?? -1
-        let dstSize = (try? fm.attributesOfItem(atPath: destVideoURL.path)[.size] as? Int) ?? -2
-        let videoChanged = (srcSize != dstSize) || (lastSyncedURL != videoURL)
+        // 2. Prepare looped video file if needed
+        let videoChanged = (lastSyncedURL != videoURL) || !fm.fileExists(atPath: destVideoURL.path)
 
         if videoChanged {
-            if fm.fileExists(atPath: destVideoURL.path) {
-                try? fm.removeItem(at: destVideoURL)
-            }
             do {
-                try fm.copyItem(at: videoURL, to: destVideoURL)
-                Log.lockScreen.info("Copied lock screen video to \(destVideoURL.path, privacy: .public)")
+                try await prepareLoopedVideo(from: videoURL, to: destVideoURL)
             } catch {
-                Log.lockScreen.error("Failed to copy lock screen video: \(error.localizedDescription, privacy: .public)")
+                Log.lockScreen.error("Failed to prepare lock screen video: \(error.localizedDescription, privacy: .public)")
                 return
             }
         }
@@ -57,31 +63,75 @@ final class LockScreenController {
         // 4. Update /Library/Caches/Desktop Pictures/<userUUID>/lockscreen.png if accessible
         updateStaticLockScreenCache(from: destThumbURL)
 
-        // 5. Update Desktop picture using NSWorkspace for all screens
-        updateDesktopPicture(using: destThumbURL)
-
-        // 6. Update entries.json
+        // 5. Update entries.json
         guard updateEntriesJSON(displayName: displayName, videoURL: destVideoURL, thumbURL: destThumbURL) else {
             Log.lockScreen.error("Failed to update entries.json")
             return
         }
 
-        // 7. Update Index.plist
+        // 6. Update Index.plist (Displays, Spaces, SystemDefault, AllSpacesAndDisplays)
         guard updateWallpaperStore() else {
             Log.lockScreen.error("Failed to update wallpaper store")
             return
         }
 
-        // 8. Configure screensaver module to WallpaperAerialsExtension
+        // 7. Configure screensaver module to WallpaperAerialsExtension
         configureScreensaver()
 
-        // 9. Restart WallpaperAgent
+        // 8. Restart WallpaperAgent
         restartWallpaperAgent()
 
         isSynced = true
         lastSyncedURL = videoURL
         lastSyncedName = displayName
         Log.lockScreen.notice("Successfully synchronized video with lock screen (\(displayName, privacy: .public))")
+    }
+
+    func ensureHealthy(restartAgentIfNeeded: Bool = false) {
+        guard isSynced else { return }
+
+        let storeURL = URL(fileURLWithPath: storePath)
+        guard let data = try? Data(contentsOf: storeURL),
+              let store = try? PropertyListSerialization.propertyList(
+                  from: data, options: [], format: nil
+              ) as? [String: Any] else {
+            _ = updateWallpaperStore()
+            if restartAgentIfNeeded { restartWallpaperAgent() }
+            return
+        }
+
+        var needsUpdate = false
+
+        if let all = store["AllSpacesAndDisplays"] as? [String: Any] {
+            if (all["Type"] as? String) != "linked" {
+                needsUpdate = true
+            }
+        } else {
+            needsUpdate = true
+        }
+
+        let displays = store["Displays"] as? [String: Any] ?? [:]
+        for uuid in getActiveDisplayUUIDs() {
+            if let disp = displays[uuid] as? [String: Any] {
+                if (disp["Type"] as? String) != "linked" {
+                    needsUpdate = true
+                    break
+                }
+            } else {
+                needsUpdate = true
+                break
+            }
+        }
+
+        if needsUpdate {
+            Log.lockScreen.info("LockScreenController: store was altered, re-asserting aerial configuration")
+            _ = updateWallpaperStore()
+            if restartAgentIfNeeded {
+                restartWallpaperAgent()
+            }
+        } else if restartAgentIfNeeded {
+            restartWallpaperAgent()
+        }
     }
 
     func remove() {
@@ -104,6 +154,100 @@ final class LockScreenController {
     }
 
     // MARK: - Private Helpers
+
+    private func getActiveDisplayUUIDs() -> [String] {
+        var uuids: [String] = []
+        for screen in NSScreen.screens {
+            guard let screenNum = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else {
+                continue
+            }
+            if let cfUUID = CGDisplayCreateUUIDFromDisplayID(screenNum)?.takeRetainedValue() {
+                let uuidString = CFUUIDCreateString(nil, cfUUID) as String
+                uuids.append(uuidString)
+            }
+        }
+        return uuids
+    }
+
+    private func prepareLoopedVideo(from srcURL: URL, to destURL: URL) async throws {
+        let asset = AVURLAsset(url: srcURL)
+        let dur = try await asset.load(.duration)
+        let srcSecs = CMTimeGetSeconds(dur)
+
+        guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
+            throw NSError(
+                domain: "LockScreenController",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "No video track found in source file"]
+            )
+        }
+
+        let composition = AVMutableComposition()
+        guard let compVideoTrack = composition.addMutableTrack(
+            withMediaType: .video,
+            preferredTrackID: kCMPersistentTrackID_Invalid
+        ) else {
+            throw NSError(
+                domain: "LockScreenController",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to create video track in composition"]
+            )
+        }
+
+        // Target: 600 seconds (10 minutes) of continuous looping so it never hits EOF on lock screen.
+        // We strictly only include the video track (NO audio track) so WallpaperAerialsExtension
+        // can decode and snapshot cleanly without sample reading errors or timebase drift.
+        let targetSecs: Double = 600.0
+        let loopCount = (srcSecs > 0 && srcSecs < targetSecs) ? max(1, Int(ceil(targetSecs / srcSecs))) : 1
+
+        var insertTime = CMTime.zero
+        let timeRange = CMTimeRange(start: .zero, duration: dur)
+        for _ in 0..<loopCount {
+            try compVideoTrack.insertTimeRange(timeRange, of: videoTrack, at: insertTime)
+            insertTime = CMTimeAdd(insertTime, dur)
+        }
+
+        // Use AVAssetExportPresetHighestQuality to ensure seamless keyframe GOPs and valid timestamps
+        guard let exporter = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetHighestQuality) else {
+            throw NSError(
+                domain: "LockScreenController",
+                code: -3,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to initialize AVAssetExportSession"]
+            )
+        }
+
+        let fm = FileManager.default
+        let tmpURL = URL(fileURLWithPath: destURL.path + ".tmp.mov")
+        if fm.fileExists(atPath: tmpURL.path) {
+            try? fm.removeItem(at: tmpURL)
+        }
+
+        if #available(macOS 27.0, *) {
+            try await exporter.export(to: tmpURL, as: .mov)
+        } else {
+            exporter.outputURL = tmpURL
+            exporter.outputFileType = .mov
+            await exporter.export()
+        }
+
+        if exporter.status == .completed {
+            if fm.fileExists(atPath: destURL.path) {
+                try? fm.removeItem(at: destURL)
+            }
+            try fm.moveItem(at: tmpURL, to: destURL)
+            Log.lockScreen.info(
+                "Exported looped lock screen video: \(loopCount, privacy: .public) loops, \(Int(Double(loopCount) * srcSecs), privacy: .public)s to \(destURL.path, privacy: .public)"
+            )
+        } else {
+            let exportErr = exporter.error?.localizedDescription ?? "unknown error"
+            Log.lockScreen.error("Video export failed: \(exportErr, privacy: .public)")
+            throw exporter.error ?? NSError(
+                domain: "LockScreenController",
+                code: -4,
+                userInfo: [NSLocalizedDescriptionKey: exportErr]
+            )
+        }
+    }
 
     private func generateThumbnail(from videoURL: URL, to destURL: URL) async {
         let asset = AVURLAsset(url: videoURL)
@@ -146,12 +290,6 @@ final class LockScreenController {
         for sub in subdirs {
             let lockscreenPath = (cacheBase as NSString).appendingPathComponent(sub).appending("/lockscreen.png")
             try? FileManager.default.removeItem(atPath: lockscreenPath)
-        }
-    }
-
-    private func updateDesktopPicture(using thumbURL: URL) {
-        for screen in NSScreen.screens {
-            try? NSWorkspace.shared.setDesktopImageURL(thumbURL, for: screen, options: [:])
         }
     }
 
@@ -248,11 +386,34 @@ final class LockScreenController {
         }
     }
 
-    private func updateWallpaperStore() -> Bool {
+    private func buildAerialEntry() -> [String: Any]? {
         let configDict: [String: String] = ["assetID": assetID]
         guard let configData = try? PropertyListSerialization.data(
             fromPropertyList: configDict, format: .binary, options: 0
-        ) else { return false }
+        ) else { return nil }
+
+        let choice: [String: Any] = [
+            "Provider": "com.apple.wallpaper.choice.aerials",
+            "Files": [] as [Any],
+            "Configuration": configData
+        ]
+        let content: [String: Any] = ["Choices": [choice]]
+        let linked: [String: Any] = [
+            "Content": content,
+            "LastSet": Date(),
+            "LastUse": Date()
+        ]
+        return [
+            "Type": "linked",
+            "Linked": linked,
+            "Idle": linked,
+            "Desktop": linked
+        ]
+    }
+
+    @discardableResult
+    private func updateWallpaperStore() -> Bool {
+        guard let entry = buildAerialEntry() else { return false }
 
         let storeURL = URL(fileURLWithPath: storePath)
         let storeDir = (storePath as NSString).deletingLastPathComponent
@@ -268,30 +429,36 @@ final class LockScreenController {
             store = [:]
         }
 
-        let choice: [String: Any] = [
-            "Provider": "com.apple.wallpaper.choice.aerials",
-            "Files": [] as [Any],
-            "Configuration": configData
-        ]
-        let content: [String: Any] = ["Choices": [choice]]
-        let linked: [String: Any] = [
-            "Content": content,
-            "LastSet": Date(),
-            "LastUse": Date()
-        ]
-        let entry: [String: Any] = [
-            "Type": "linked",
-            "Linked": linked
-        ]
-
         store["SystemDefault"] = entry
         store["AllSpacesAndDisplays"] = entry
 
-        if var displays = store["Displays"] as? [String: Any] {
-            for key in displays.keys {
-                displays[key] = entry
+        let activeUUIDs = getActiveDisplayUUIDs()
+
+        var displays = store["Displays"] as? [String: Any] ?? [:]
+        for key in displays.keys {
+            displays[key] = entry
+        }
+        for uuid in activeUUIDs {
+            displays[uuid] = entry
+        }
+        store["Displays"] = displays
+
+        if var spaces = store["Spaces"] as? [String: Any] {
+            for (spaceID, spaceVal) in spaces {
+                guard var spaceDict = spaceVal as? [String: Any] else { continue }
+                spaceDict["Default"] = entry
+                if var spDisplays = spaceDict["Displays"] as? [String: Any] {
+                    for dispKey in spDisplays.keys {
+                        spDisplays[dispKey] = entry
+                    }
+                    for uuid in activeUUIDs {
+                        spDisplays[uuid] = entry
+                    }
+                    spaceDict["Displays"] = spDisplays
+                }
+                spaces[spaceID] = spaceDict
             }
-            store["Displays"] = displays
+            store["Spaces"] = spaces
         }
 
         do {
@@ -330,8 +497,34 @@ final class LockScreenController {
         ]
 
         store["AllSpacesAndDisplays"] = defaultEntry
+        store["SystemDefault"] = defaultEntry
+
+        if var displays = store["Displays"] as? [String: Any] {
+            for key in displays.keys {
+                displays[key] = defaultEntry
+            }
+            store["Displays"] = displays
+        }
+
+        if var spaces = store["Spaces"] as? [String: Any] {
+            for (spaceID, spaceVal) in spaces {
+                guard var spaceDict = spaceVal as? [String: Any] else { continue }
+                spaceDict["Default"] = defaultEntry
+                if var spDisplays = spaceDict["Displays"] as? [String: Any] {
+                    for dispKey in spDisplays.keys {
+                        spDisplays[dispKey] = defaultEntry
+                    }
+                    spaceDict["Displays"] = spDisplays
+                }
+                spaces[spaceID] = spaceDict
+            }
+            store["Spaces"] = spaces
+        }
+
         if let data = try? PropertyListSerialization.data(fromPropertyList: store, format: .binary, options: 0) {
-            try? data.write(to: storeURL)
+            let tmpURL = URL(fileURLWithPath: storePath + ".tmp")
+            try? data.write(to: tmpURL)
+            _ = try? FileManager.default.replaceItemAt(storeURL, withItemAt: tmpURL)
         }
     }
 

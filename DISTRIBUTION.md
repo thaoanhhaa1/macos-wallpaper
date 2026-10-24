@@ -154,8 +154,8 @@ Hướng dẫn có trong DMG và trong `Distribution/Uninstall Wallpaper.txt`:
 2. Xóa `WallpaperApp.app` khỏi Applications.
 3. Xóa login item trong System Settings → General → Login Items nếu còn.
 4. Tùy chọn xóa cấu hình:
-   - bản không sandbox: `defaults delete com.local.wallpaperapp`
-   - bản sandbox: `rm -rf ~/Library/Containers/com.local.wallpaperapp`
+   - bản không sandbox: `defaults delete com.tcs.wallpaper`
+   - bản sandbox: `rm -rf ~/Library/Containers/com.tcs.wallpaper`
 
 ## Troubleshooting
 

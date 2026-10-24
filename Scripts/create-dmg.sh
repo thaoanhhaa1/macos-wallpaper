@@ -26,12 +26,20 @@ if [[ -f "$ROOT/Design/AppIcon.icns" ]]; then
   SetFile -a C "$STAGE" 2>/dev/null || true
 fi
 
-hdiutil create \
-  -volname "Wallpaper" \
-  -srcfolder "$STAGE" \
-  -ov \
-  -format UDZO \
-  -fs HFS+ \
-  "$DMG" >&2
+if diskutil image create --help &>/dev/null; then
+  diskutil image create from \
+    --format UDZO \
+    --volumeName "Wallpaper" \
+    "$STAGE" \
+    "$DMG" >&2
+else
+  hdiutil create \
+    -volname "Wallpaper" \
+    -srcfolder "$STAGE" \
+    -ov \
+    -format UDZO \
+    -fs HFS+ \
+    "$DMG" >&2
+fi
 
 echo "$DMG"

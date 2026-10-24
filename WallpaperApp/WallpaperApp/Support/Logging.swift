@@ -1,7 +1,7 @@
 import OSLog
 
 enum Log {
-    static let subsystem = "com.local.wallpaperapp"
+    static let subsystem = "com.tcs.wallpaper"
 
     static let app = Logger(subsystem: subsystem, category: "app")
     static let settings = Logger(subsystem: subsystem, category: "settings")

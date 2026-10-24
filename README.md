@@ -30,7 +30,7 @@ phạm vi các pha tiếp theo nằm trong [`PLAN.md`](PLAN.md).
 App chạy dạng menu bar utility (`LSUIElement = YES`), không có Dock icon. Lần chạy đầu
 tiên sẽ mở Settings một lần; các lần sau mở lại bằng item **Settings…** trên menu bar.
 
-Bundle identifier: `com.local.wallpaperapp`. Debug dùng ad-hoc signing để phát triển;
+Bundle identifier: `com.tcs.wallpaper`. Debug dùng ad-hoc signing để phát triển;
 Release bật hardened runtime và được ký bằng Developer ID qua quy trình trong
 [`DISTRIBUTION.md`](DISTRIBUTION.md). App Sandbox tắt cho kênh Developer ID; entitlements
 sandbox đã chuẩn bị trong `WallpaperApp/WallpaperApp-Sandbox.entitlements` cho nhánh
@@ -313,7 +313,7 @@ Scripts phân phối: `build-release.sh`, `notarize.sh`, `create-dmg.sh`,
 
 ### Logging
 
-Subsystem: `com.local.wallpaperapp`. Category: `app`, `settings`, `menu-bar`, `media`,
+Subsystem: `com.tcs.wallpaper`. Category: `app`, `settings`, `menu-bar`, `media`,
 `playback`, `surface`, `display`, `persistence`, `policy`, `diagnostics`, `startup`,
 `distribution`.
 
