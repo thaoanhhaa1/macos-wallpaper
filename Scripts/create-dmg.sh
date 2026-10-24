@@ -20,6 +20,12 @@ if [[ -f "$ROOT/Distribution/Uninstall Wallpaper.txt" ]]; then
   cp "$ROOT/Distribution/Uninstall Wallpaper.txt" "$STAGE/Uninstall Wallpaper.txt"
 fi
 
+if [[ -f "$ROOT/Design/AppIcon.icns" ]]; then
+  cp "$ROOT/Design/AppIcon.icns" "$STAGE/.VolumeIcon.icns"
+  SetFile -c icnC "$STAGE/.VolumeIcon.icns" 2>/dev/null || true
+  SetFile -a C "$STAGE" 2>/dev/null || true
+fi
+
 hdiutil create \
   -volname "Wallpaper" \
   -srcfolder "$STAGE" \

@@ -48,7 +48,8 @@ struct SettingsView: View {
     private var generalPage: some View {
         settingsPage(
             subtitle: "Choose a video, apply it to the desktop, and revisit recent media.",
-            systemImage: "play.rectangle.on.rectangle.fill"
+            systemImage: "play.rectangle.on.rectangle.fill",
+            showAppIcon: true
         ) {
             MediaCard(model: model)
             WallpaperCard(model: model)
@@ -82,11 +83,12 @@ struct SettingsView: View {
     private func settingsPage<Content: View>(
         subtitle: String,
         systemImage: String,
+        showAppIcon: Bool = false,
         @ViewBuilder content: () -> Content
     ) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                header(subtitle: subtitle, systemImage: systemImage)
+                header(subtitle: subtitle, systemImage: systemImage, showAppIcon: showAppIcon)
                 content()
                 footer
             }
@@ -95,12 +97,20 @@ struct SettingsView: View {
         }
     }
 
-    private func header(subtitle: String, systemImage: String) -> some View {
+    private func header(subtitle: String, systemImage: String, showAppIcon: Bool = false) -> some View {
         HStack(alignment: .center, spacing: 14) {
-            Image(systemName: systemImage)
-                .font(.system(size: 36, weight: .regular))
-                .foregroundStyle(.tint)
-                .accessibilityHidden(true)
+            if showAppIcon, let appIcon = NSApp.applicationIconImage {
+                Image(nsImage: appIcon)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 48, height: 48)
+                    .accessibilityHidden(true)
+            } else {
+                Image(systemName: systemImage)
+                    .font(.system(size: 36, weight: .regular))
+                    .foregroundStyle(.tint)
+                    .accessibilityHidden(true)
+            }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Wallpaper")

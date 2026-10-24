@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="Design/brand-banner.jpg" alt="Wallpaper for macOS" width="800" style="border-radius: 12px;">
+</p>
+
 # Wallpaper for macOS
 
 Ứng dụng macOS native dùng video làm hình nền động. Repo hiện có hai phần:
