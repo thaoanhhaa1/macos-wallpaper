@@ -6,6 +6,7 @@ enum ResourcePauseReason: String, CaseIterable, Identifiable, Equatable {
     case lowPowerMode
     case displaySleep
     case systemSleep
+    case screenLocked
     case thermalPressure
     case user
 
@@ -18,6 +19,7 @@ enum ResourcePauseReason: String, CaseIterable, Identifiable, Equatable {
         case .lowPowerMode: "Low Power Mode enabled"
         case .displaySleep: "Display asleep"
         case .systemSleep: "System asleep"
+        case .screenLocked: "Screen locked"
         case .thermalPressure: "Thermal pressure"
         case .user: "Paused manually"
         }
@@ -30,6 +32,7 @@ enum ResourcePauseReason: String, CaseIterable, Identifiable, Equatable {
         case .lowPowerMode: "leaf"
         case .displaySleep: "moon.zzz"
         case .systemSleep: "powersleep"
+        case .screenLocked: "lock.fill"
         case .thermalPressure: "thermometer.high"
         case .user: "pause.fill"
         }
@@ -42,6 +45,7 @@ struct ResourceConditions: Equatable {
     var isLowPowerMode = false
     var isDisplayAsleep = false
     var isSystemAsleep = false
+    var isScreenLocked = false
     var thermalState: ProcessInfo.ThermalState = .nominal
 
     var isThermallyConstrained: Bool {
@@ -69,6 +73,7 @@ struct ResourceConditions: Equatable {
             "thermal \(thermalStateTitle.lowercased())"
         ]
         if isFullscreenAppActive { parts.append("fullscreen app") }
+        if isScreenLocked { parts.append("screen locked") }
         if isDisplayAsleep { parts.append("display asleep") }
         if isSystemAsleep { parts.append("system asleep") }
         return parts.joined(separator: " · ")
@@ -100,6 +105,9 @@ struct ResourcePolicy: Equatable {
         if pauseOnLowPowerMode && conditions.isLowPowerMode {
             reasons.insert(.lowPowerMode)
         }
+        if conditions.isScreenLocked {
+            reasons.insert(.screenLocked)
+        }
         if conditions.isDisplayAsleep {
             reasons.insert(.displaySleep)
         }
@@ -118,7 +126,7 @@ struct ResourcePolicy: Equatable {
         if pauseOnFullscreen { rules.append("pause on fullscreen") }
         if pauseOnBattery { rules.append("pause on battery") }
         if pauseOnLowPowerMode { rules.append("pause in Low Power Mode") }
-        rules.append("pause on sleep and thermal pressure")
+        rules.append("pause on screen lock, sleep and thermal pressure")
         return rules.joined(separator: ", ")
     }
 }

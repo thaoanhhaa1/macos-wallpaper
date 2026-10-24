@@ -10,9 +10,11 @@ final class ResourcePolicyMonitor {
     private(set) var conditions = ResourceConditions()
 
     private var observerTokens: [NSObjectProtocol] = []
+    private var distributedTokens: [NSObjectProtocol] = []
     private var refreshTask: Task<Void, Never>?
     private var isDisplayAsleep = false
     private var isSystemAsleep = false
+    private var isScreenLocked = false
     private var isObserving = false
 
     private let refreshInterval: TimeInterval = 4
@@ -48,6 +50,7 @@ final class ResourcePolicyMonitor {
         next.isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
         next.isDisplayAsleep = isDisplayAsleep
         next.isSystemAsleep = isSystemAsleep
+        next.isScreenLocked = isScreenLocked
         next.thermalState = ProcessInfo.processInfo.thermalState
 
         guard force || next != conditions else { return }
@@ -62,6 +65,11 @@ final class ResourcePolicyMonitor {
         if previous.isFullscreenAppActive != next.isFullscreenAppActive {
             Log.policy.notice(
                 "Fullscreen state \(next.isFullscreenAppActive ? "entered" : "exited", privacy: .public)"
+            )
+        }
+        if previous.isScreenLocked != next.isScreenLocked {
+            Log.policy.notice(
+                "Screen lock state \(next.isScreenLocked ? "locked" : "unlocked", privacy: .public)"
             )
         }
     }
@@ -148,28 +156,104 @@ final class ResourcePolicyMonitor {
                 self?.refresh()
             }
         })
+
+        let distCenter = DistributedNotificationCenter.default()
+        distributedTokens.append(distCenter.addObserver(
+            forName: NSNotification.Name("com.apple.screenIsLocked"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.isScreenLocked = true
+                self?.refresh()
+            }
+        })
+        distributedTokens.append(distCenter.addObserver(
+            forName: NSNotification.Name("com.apple.screenIsUnlocked"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.isScreenLocked = false
+                self?.refresh()
+            }
+        })
+
+        let darwinCenter = CFNotificationCenterGetDarwinNotifyCenter()
+        let observer = Unmanaged.passUnretained(self).toOpaque()
+        CFNotificationCenterAddObserver(
+            darwinCenter,
+            observer,
+            { _, observer, _, _, _ in
+                guard let observer else { return }
+                let me = Unmanaged<ResourcePolicyMonitor>.fromOpaque(observer).takeUnretainedValue()
+                Task { @MainActor in
+                    me.isScreenLocked = true
+                    me.refresh()
+                }
+            },
+            "com.apple.sessionagent.screenIsLocked" as CFString,
+            nil,
+            .deliverImmediately
+        )
+        CFNotificationCenterAddObserver(
+            darwinCenter,
+            observer,
+            { _, observer, _, _, _ in
+                guard let observer else { return }
+                let me = Unmanaged<ResourcePolicyMonitor>.fromOpaque(observer).takeUnretainedValue()
+                Task { @MainActor in
+                    me.isScreenLocked = false
+                    me.refresh()
+                }
+            },
+            "com.apple.sessionagent.screenIsUnlocked" as CFString,
+            nil,
+            .deliverImmediately
+        )
     }
 
     private func removeObservers() {
         let workspace = NSWorkspace.shared.notificationCenter
         let center = NotificationCenter.default
+        let distCenter = DistributedNotificationCenter.default()
 
         for token in observerTokens {
             workspace.removeObserver(token)
             center.removeObserver(token)
         }
         observerTokens.removeAll()
+
+        for token in distributedTokens {
+            distCenter.removeObserver(token)
+        }
+        distributedTokens.removeAll()
+
+        let darwinCenter = CFNotificationCenterGetDarwinNotifyCenter()
+        CFNotificationCenterRemoveEveryObserver(
+            darwinCenter,
+            Unmanaged.passUnretained(self).toOpaque()
+        )
     }
 
     deinit {
         refreshTask?.cancel()
         let workspace = NSWorkspace.shared.notificationCenter
         let center = NotificationCenter.default
+        let distCenter = DistributedNotificationCenter.default()
 
         for token in observerTokens {
             workspace.removeObserver(token)
             center.removeObserver(token)
         }
+        for token in distributedTokens {
+            distCenter.removeObserver(token)
+        }
+        let darwinCenter = CFNotificationCenterGetDarwinNotifyCenter()
+        CFNotificationCenterRemoveEveryObserver(
+            darwinCenter,
+            Unmanaged.passUnretained(self).toOpaque()
+        )
     }
 }
 

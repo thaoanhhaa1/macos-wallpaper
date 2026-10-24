@@ -1,10 +1,11 @@
 import Foundation
 
 struct AppSettings: Codable, Equatable {
-    static let currentSchemaVersion = 4
+    static let currentSchemaVersion = 5
 
     var schemaVersion: Int
     var launchAtLogin: Bool
+    var syncLockScreen: Bool
     var playback: PlaybackSettings
     var displayMode: DisplayMode
     var wallpaper: PersistedWallpaperState
@@ -16,6 +17,7 @@ struct AppSettings: Codable, Equatable {
     init(
         schemaVersion: Int = AppSettings.currentSchemaVersion,
         launchAtLogin: Bool = false,
+        syncLockScreen: Bool = true,
         playback: PlaybackSettings = PlaybackSettings(),
         displayMode: DisplayMode = .mainScreen,
         wallpaper: PersistedWallpaperState = PersistedWallpaperState(),
@@ -24,6 +26,7 @@ struct AppSettings: Codable, Equatable {
     ) {
         self.schemaVersion = schemaVersion
         self.launchAtLogin = launchAtLogin
+        self.syncLockScreen = syncLockScreen
         self.playback = playback
         self.displayMode = displayMode
         self.wallpaper = wallpaper
@@ -36,6 +39,7 @@ struct AppSettings: Codable, Equatable {
         schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion)
             ?? 1
         launchAtLogin = try container.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
+        syncLockScreen = try container.decodeIfPresent(Bool.self, forKey: .syncLockScreen) ?? true
         playback = try container.decodeIfPresent(PlaybackSettings.self, forKey: .playback)
             ?? PlaybackSettings()
         displayMode = try container.decodeIfPresent(DisplayMode.self, forKey: .displayMode)
@@ -59,6 +63,9 @@ struct AppSettings: Codable, Equatable {
         }
         if schemaVersion < 4 {
             schemaVersion = 4
+        }
+        if schemaVersion < 5 {
+            schemaVersion = 5
         }
     }
 }

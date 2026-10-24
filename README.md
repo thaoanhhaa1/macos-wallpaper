@@ -262,6 +262,15 @@ launch at login.
 - Theo hướng dẫn trong DMG để uninstall; kiểm tra app, login item và preference đã được
   xóa.
 
+### Đồng bộ Lock Screen (Màn hình khóa)
+
+- Khi **Set for Lock Screen** bật (mặc định), việc apply video sẽ tự động đồng bộ sang màn hình khóa macOS:
+  - Video được inject vào hệ thống native aerials screensaver của macOS (`com.apple.wallpaper/aerials` và `Store/Index.plist`).
+  - Screensaver module được cấu hình dùng `WallpaperAerialsExtension` để lock screen phát video native mượt mà.
+  - Snapshot ảnh độ phân giải cao được tạo và cập nhật vào cache màn hình khóa `/Library/Caches/Desktop Pictures/<UUID>/lockscreen.png` và system desktop image via `NSWorkspace`.
+  - Khi màn hình khóa kích hoạt (`com.apple.sessionagent.screenIsLocked`), surface window tạm dừng playback để tiết kiệm GPU/CPU và nhường chỗ cho lock screen native. Khi mở khóa, surface window tiếp tục phát ngay lập tức.
+  - Khi người dùng bấm **Remove Wallpaper** hoặc tắt toggle, lock screen được hoàn trả về mặc định.
+
 ### Kiểm tra playback thủ công
 
 Dùng **Choose Video…** hoặc **Preview Fixture** trong Settings, sau đó kiểm tra:

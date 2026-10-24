@@ -20,6 +20,14 @@ final class AppModel {
                 reapplyResourcePolicy()
             }
 
+            if oldValue.syncLockScreen != settings.syncLockScreen {
+                if settings.syncLockScreen {
+                    syncActiveWallpaperToLockScreen()
+                } else {
+                    lockScreen.remove()
+                }
+            }
+
             Log.settings.info("Settings updated schema=\(self.settings.schemaVersion, privacy: .public)")
         }
     }
@@ -28,6 +36,7 @@ final class AppModel {
     let wallpaper = WallpaperSurfaceController()
     let performanceMonitor = PerformanceMonitor()
     let launchAtLogin = LaunchAtLoginController()
+    let lockScreen = LockScreenController.shared
     let distributionInfo: DistributionInfo
 
     private let resourcePolicyMonitor = ResourcePolicyMonitor()
@@ -653,10 +662,31 @@ final class AppModel {
             Log.surface.notice(
                 "Applied wallpaper \(cached.reference.displayName, privacy: .public) mode=\(mode.rawValue, privacy: .public)"
             )
+
+            if settings.syncLockScreen {
+                Task { [weak self] in
+                    await self?.lockScreen.sync(
+                        videoURL: cached.url,
+                        displayName: cached.reference.displayName
+                    )
+                }
+            }
         } catch {
             rollbackSettings(to: previous, reason: "Apply rollback")
             Log.surface.error(
                 "Apply failed for \(reference.displayName, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
+        }
+    }
+
+    func syncActiveWallpaperToLockScreen() {
+        guard settings.syncLockScreen,
+              let activeMedia = settings.wallpaper.active?.media,
+              let cached = try? cachedMedia(for: activeMedia) else { return }
+        Task { [weak self] in
+            await self?.lockScreen.sync(
+                videoURL: cached.url,
+                displayName: cached.reference.displayName
             )
         }
     }
@@ -668,6 +698,7 @@ final class AppModel {
         settings.wallpaper.restoreIssue = nil
         missingWallpaper = nil
         stopUnusedMedia(keeping: [])
+        lockScreen.remove()
         Log.surface.notice("Removed wallpaper; the desktop picture is visible again")
     }
 
@@ -734,6 +765,7 @@ final class AppModel {
         recentMedia=\(settings.recentMedia.count)
         securityScopedResources=\(activeSecurityScopedResourceCount)
         launchAtLogin=\(settings.launchAtLogin) status=\(launchAtLogin.status.summary)
+        syncLockScreen=\(settings.syncLockScreen) lockScreenSynced=\(lockScreen.isSynced)
         """
 
         performanceMonitor.sampleNow()
@@ -799,8 +831,13 @@ final class AppModel {
         let reasons = resourcePolicy.pauseReasons(for: conditions)
 
         guard reasons != resourcePauseReasons else { return }
+        let previous = resourcePauseReasons
         resourcePauseReasons = reasons
         wallpaper.setResourcePauseReasons(reasons)
+
+        if previous.contains(.screenLocked) && !reasons.contains(.screenLocked) {
+            wallpaper.reassertOrdering()
+        }
     }
 
     private func handleDisplayConfigurationChange(_ newDisplays: [DisplayInfo]) {
@@ -1099,6 +1136,15 @@ final class AppModel {
             Log.persistence.notice(
                 "\(reason, privacy: .public) succeeded for \(updated.media.displayName, privacy: .public)"
             )
+
+            if settings.syncLockScreen {
+                Task { [weak self] in
+                    await self?.lockScreen.sync(
+                        videoURL: selection.url,
+                        displayName: updated.media.displayName
+                    )
+                }
+            }
         } catch {
             if assignment.displayMode == .perDisplay {
                 Log.persistence.error(
@@ -1227,6 +1273,12 @@ final class AppModel {
         Log.persistence.notice(
             "\(reason, privacy: .public) restored \(appliedPersistentIDs.count, privacy: .public) per-display surface(s) issues=\(issues.count, privacy: .public)"
         )
+
+        if settings.syncLockScreen, let media = selectedMedia, let url = selectedMediaURL {
+            Task { [weak self] in
+                await self?.lockScreen.sync(videoURL: url, displayName: media.displayName)
+            }
+        }
     }
 
     private func handleRestoreFailure(_ error: Error, assignment: WallpaperAssignment) {

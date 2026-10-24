@@ -65,6 +65,35 @@ struct WallpaperCard: View {
                 Text(surfaceNote)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Divider()
+
+                HStack(alignment: .center) {
+                    Toggle(isOn: Binding(
+                        get: { model.settings.syncLockScreen },
+                        set: { model.settings.syncLockScreen = $0 }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Set for Lock Screen")
+                                .fontWeight(.medium)
+                            Text("Synchronizes the wallpaper video with the macOS Lock Screen.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Spacer()
+
+                    if model.lockScreen.isSynced {
+                        Label("LOCK SCREEN READY", systemImage: "lock.fill")
+                            .font(.caption2.weight(.bold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.16))
+                            .foregroundStyle(Color.accentColor)
+                            .clipShape(Capsule())
+                    }
+                }
             }
             .padding(6)
             .frame(maxWidth: .infinity, alignment: .leading)
