@@ -1,9 +1,11 @@
 import AppKit
 import AVFoundation
+import CoreMedia
 import Darwin
 import Foundation
 import Observation
 import OpenDirectory
+import VideoToolbox
 
 @MainActor
 @Observable
@@ -234,70 +236,172 @@ final class LockScreenController {
             )
         }
 
-        let composition = AVMutableComposition()
-        guard let compVideoTrack = composition.addMutableTrack(
-            withMediaType: .video,
-            preferredTrackID: kCMPersistentTrackID_Invalid
-        ) else {
-            throw NSError(
-                domain: "LockScreenController",
-                code: -2,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to create video track in composition"]
-            )
+        let naturalSize = try await videoTrack.load(.naturalSize)
+        var nomFps = try await videoTrack.load(.nominalFrameRate)
+        if nomFps < 1 || !nomFps.isFinite {
+            nomFps = 30
         }
 
-        // Target: 600 seconds (10 minutes) of continuous looping so it never hits EOF on lock screen.
-        // We strictly only include the video track (NO audio track) so WallpaperAerialsExtension
-        // can decode and snapshot cleanly without sample reading errors or timebase drift.
-        let targetSecs: Double = 600.0
-        let maxLoops = 120
+        // Hardware encoders in VideoToolbox require even pixel dimensions
+        let rawW = Int(naturalSize.width)
+        let rawH = Int(naturalSize.height)
+        let width = max((rawW / 2) * 2, 320)
+        let height = max((rawH / 2) * 2, 240)
+
+        // Target: ~300s (5 minutes) of continuous looping so it never hits EOF on lock screen.
+        let targetSecs: Double = 300.0
+        let maxLoops = 60
         let calculatedLoops = srcSecs < targetSecs ? Int(ceil(targetSecs / srcSecs)) : 1
         let loopCount = min(max(calculatedLoops, 1), maxLoops)
 
-        var insertTime = CMTime.zero
-        let timeRange = CMTimeRange(start: .zero, duration: dur)
-        for _ in 0..<loopCount {
-            try compVideoTrack.insertTimeRange(timeRange, of: videoTrack, at: insertTime)
-            insertTime = CMTimeAdd(insertTime, dur)
-        }
-
-        // Use AVAssetExportPresetHighestQuality to ensure seamless keyframe GOPs and valid timestamps
-        guard let exporter = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetHighestQuality) else {
-            throw NSError(
-                domain: "LockScreenController",
-                code: -3,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to initialize AVAssetExportSession"]
-            )
-        }
+        // Apple Aerials bitrate standard: ~8-12 Mbps for 1080p, up to 16 Mbps for 4K
+        let pixelCount = width * height
+        let bitrate = min(max(pixelCount * 4, 6_000_000), 16_000_000)
 
         let fm = FileManager.default
         let tmpURL = URL(fileURLWithPath: "\(destURL.path).\(UUID().uuidString).tmp.mov")
-
-        if #available(macOS 27.0, *) {
-            try await exporter.export(to: tmpURL, as: .mov)
-        } else {
-            exporter.outputURL = tmpURL
-            exporter.outputFileType = .mov
-            await exporter.export()
+        if fm.fileExists(atPath: tmpURL.path) {
+            try? fm.removeItem(at: tmpURL)
         }
 
-        if exporter.status == .completed {
+        do {
+            try await encodeTemporalHEVC(
+                asset: asset,
+                track: videoTrack,
+                width: width,
+                height: height,
+                fps: nomFps,
+                duration: dur,
+                loopCount: loopCount,
+                bitrate: bitrate,
+                destinationURL: tmpURL
+            )
+
             if fm.fileExists(atPath: destURL.path) {
                 try? fm.removeItem(at: destURL)
             }
             try fm.moveItem(at: tmpURL, to: destURL)
             Log.lockScreen.info(
-                "Exported looped lock screen video: \(loopCount, privacy: .public) loops, \(Int(Double(loopCount) * srcSecs), privacy: .public)s to \(destURL.path, privacy: .private)"
+                "Exported temporal HEVC lock screen video: \(loopCount, privacy: .public) loops, \(Int(Double(loopCount) * srcSecs), privacy: .public)s to \(destURL.path, privacy: .private)"
             )
-        } else {
-            let exportErr = exporter.error?.localizedDescription ?? "unknown error"
-            Log.lockScreen.error("Video export failed: \(exportErr, privacy: .public)")
-            throw exporter.error ?? NSError(
+        } catch {
+            try? fm.removeItem(at: tmpURL)
+            Log.lockScreen.error("Temporal HEVC video export failed: \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
+    }
+
+    private nonisolated func encodeTemporalHEVC(
+        asset: AVURLAsset,
+        track: AVAssetTrack,
+        width: Int,
+        height: Int,
+        fps: Float,
+        duration: CMTime,
+        loopCount: Int,
+        bitrate: Int,
+        destinationURL: URL
+    ) async throws {
+        let streamWriter = TemporalHEVCEncoder(destinationURL: destinationURL)
+
+        let callback: VTCompressionOutputCallback = { refcon, _, status, _, sampleBuffer in
+            guard status == noErr, let sampleBuffer = sampleBuffer, let refcon = refcon else { return }
+            let encoder = Unmanaged<TemporalHEVCEncoder>.fromOpaque(refcon).takeUnretainedValue()
+            encoder.handleEncodedSampleBuffer(sampleBuffer)
+        }
+
+        var sessionOut: VTCompressionSession?
+        let spec: [CFString: Any] = [
+            kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true
+        ]
+
+        let createStatus = VTCompressionSessionCreate(
+            allocator: kCFAllocatorDefault,
+            width: Int32(width),
+            height: Int32(height),
+            codecType: kCMVideoCodecType_HEVC,
+            encoderSpecification: spec as CFDictionary,
+            imageBufferAttributes: nil,
+            compressedDataAllocator: nil,
+            outputCallback: callback,
+            refcon: Unmanaged.passUnretained(streamWriter).toOpaque(),
+            compressionSessionOut: &sessionOut
+        )
+
+        guard createStatus == noErr, let session = sessionOut else {
+            throw NSError(
                 domain: "LockScreenController",
-                code: -4,
-                userInfo: [NSLocalizedDescriptionKey: exportErr]
+                code: Int(createStatus),
+                userInfo: [NSLocalizedDescriptionKey: "Failed to create VTCompressionSession (error \(createStatus))"]
             )
         }
+
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanFalse)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_HEVC_Main10_AutoLevel)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanTrue)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: NSNumber(value: fps))
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: NSNumber(value: Int(fps * 2)))
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: NSNumber(value: bitrate))
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ColorPrimaries, value: kCVImageBufferColorPrimaries_ITU_R_709_2)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_TransferFunction, value: kCVImageBufferTransferFunction_ITU_R_709_2)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_YCbCrMatrix, value: kCVImageBufferYCbCrMatrix_ITU_R_709_2)
+
+        // Enable temporal scalability so WallpaperAerialsExtension receives tscl and tsas sample groups.
+        // This is strictly required for the unlock slow-motion ramp-down transition on macOS 14+.
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowTemporalCompression, value: kCFBooleanTrue)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_BaseLayerFrameRate, value: NSNumber(value: Double(fps) / 2.0))
+
+        VTCompressionSessionPrepareToEncodeFrames(session)
+
+        let timescale = Int32(max(fps.rounded(), 1))
+
+        for loop in 0..<loopCount {
+            let offset = CMTimeMultiply(duration, multiplier: Int32(loop))
+
+            let reader = try AVAssetReader(asset: asset)
+            let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+            ])
+            output.alwaysCopiesSampleData = false
+            if reader.canAdd(output) {
+                reader.add(output)
+            }
+            reader.startReading()
+
+            while let sampleBuffer = output.copyNextSampleBuffer() {
+                guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { continue }
+                let sourcePTS = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                let pts = CMTimeAdd(sourcePTS, offset)
+
+                var frameDuration = CMSampleBufferGetDuration(sampleBuffer)
+                if !frameDuration.isValid || frameDuration.value == 0 {
+                    frameDuration = CMTime(value: 1, timescale: timescale)
+                }
+
+                VTCompressionSessionEncodeFrame(
+                    session,
+                    imageBuffer: imageBuffer,
+                    presentationTimeStamp: pts,
+                    duration: frameDuration,
+                    frameProperties: nil,
+                    sourceFrameRefcon: nil,
+                    infoFlagsOut: nil
+                )
+            }
+
+            if reader.status == .failed {
+                throw reader.error ?? NSError(
+                    domain: "LockScreenController",
+                    code: -3,
+                    userInfo: [NSLocalizedDescriptionKey: "Asset reader failed during decoding"]
+                )
+            }
+        }
+
+        VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
+        VTCompressionSessionInvalidate(session)
+
+        try await streamWriter.finish()
     }
 
     private func generateThumbnail(from videoURL: URL, to destURL: URL) async {
@@ -461,6 +565,7 @@ final class LockScreenController {
             "subcategories": [subcategoryID],
             "url-4K-SDR-240FPS": videoFileURL,
             "previewImage": thumbFileURL,
+            "videoGravity": "resize",
             "pointsOfInterest": ["0": "WP_0"]
         ]
 
@@ -907,3 +1012,96 @@ final class LockScreenController {
         }
     }
 }
+
+// MARK: - TemporalHEVCEncoder
+
+private final class TemporalHEVCEncoder: @unchecked Sendable {
+    private let outURL: URL
+    private var writer: AVAssetWriter?
+    private var input: AVAssetWriterInput?
+    private var isStarted = false
+    private let lock = NSLock()
+    private var writeError: Error?
+    private var hasFailed = false
+
+    init(destinationURL: URL) {
+        self.outURL = destinationURL
+    }
+
+    func handleEncodedSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if hasFailed || !CMSampleBufferDataIsReady(sampleBuffer) { return }
+
+        if !isStarted {
+            guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else { return }
+            do {
+                let assetWriter = try AVAssetWriter(outputURL: outURL, fileType: .mov)
+                let writerInput = AVAssetWriterInput(
+                    mediaType: .video,
+                    outputSettings: nil,
+                    sourceFormatHint: formatDescription
+                )
+                writerInput.expectsMediaDataInRealTime = false
+                if assetWriter.canAdd(writerInput) {
+                    assetWriter.add(writerInput)
+                }
+                assetWriter.startWriting()
+                assetWriter.startSession(atSourceTime: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+                self.writer = assetWriter
+                self.input = writerInput
+                self.isStarted = true
+            } catch {
+                self.hasFailed = true
+                self.writeError = error
+                return
+            }
+        }
+
+        guard let input = input, let writer = writer else { return }
+        while !input.isReadyForMoreMediaData {
+            if writer.status == .failed {
+                self.hasFailed = true
+                self.writeError = writer.error
+                return
+            }
+            usleep(500)
+        }
+
+        if !input.append(sampleBuffer) {
+            self.hasFailed = true
+            self.writeError = writer.error
+        }
+    }
+
+    func finish() async throws {
+        let (activeWriter, activeInput, activeError): (AVAssetWriter?, AVAssetWriterInput?, Error?) = lock.withLock {
+            let res = (self.writer, self.input, self.writeError)
+            self.input?.markAsFinished()
+            return res
+        }
+
+        guard let writer = activeWriter, activeInput != nil else {
+            if let err = activeError {
+                throw err
+            } else {
+                throw NSError(
+                    domain: "TemporalHEVCEncoder",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "No video frames were written to destination"]
+                )
+            }
+        }
+
+        await writer.finishWriting()
+        if writer.status != .completed {
+            throw writer.error ?? NSError(
+                domain: "TemporalHEVCEncoder",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Asset writer failed to finish writing"]
+            )
+        }
+    }
+}
+

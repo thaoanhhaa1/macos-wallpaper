@@ -856,9 +856,9 @@ final class AppModel {
             wallpaper.reassertOrdering()
             if settings.syncLockScreen {
                 Task { @MainActor [weak self] in
-                    // Allow macOS unlock session transition to settle, then ensure WallpaperAgent is fresh
+                    // Allow macOS unlock session transition to settle, then ensure lock screen state is healthy
                     try? await Task.sleep(nanoseconds: 800_000_000)
-                    self?.lockScreen.ensureHealthy(restartAgentIfNeeded: true)
+                    self?.lockScreen.ensureHealthy(restartAgentIfNeeded: false)
                 }
             }
         } else if !previous.contains(.screenLocked) && reasons.contains(.screenLocked) {

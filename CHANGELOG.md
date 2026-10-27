@@ -20,7 +20,9 @@ Mọi thay đổi đáng chú ý của dự án **Wallpaper for macOS** sẽ đ�
 - **Bảo vệ quyền riêng tư chẩn đoán (`DiagnosticsRedactor`)**:
   - Thêm module `DiagnosticsRedactor` tự động ẩn/làm mờ (redact) tên tệp video và đường dẫn tệp riêng tư trong bản sao chép Diagnostics.
   - Chuyển đổi toàn bộ log `OSLog` liên quan đến đường dẫn và tên tệp của người dùng sang chế độ `privacy: .private`.
-- **Cơ chế an toàn cho Lock Screen**:
+- **Cơ chế an toàn & chất lượng Lock Screen**:
+  - Tích hợp bộ mã hóa **VideoToolbox HEVC Main 10** với **Temporal Scalability** (`tscl` / `tsas` sample groups qua `kVTCompressionPropertyKey_BaseLayerFrameRate`), khắc phục triệt để lỗi màn hình đen khi mở khóa máy (`VideoSampleReadingErrors Code=4`).
+  - Tối ưu hóa quá trình unlock: loại bỏ việc khởi động lại `WallpaperAgent` cưỡng bức khi mở khóa, giúp quá trình chuyển cảnh từ màn hình khóa sang desktop diễn ra mượt mà không bị giật/nhấp nháy.
   - Nhận biết môi trường App Sandbox tại runtime (`isLockScreenSyncAvailable`); ẩn toggle và hiển thị nhãn trạng thái khi chạy trong sandbox, ngăn ngừa lỗi vi phạm sandbox.
   - Tự động sao lưu `Index.plist` và screensaver preferences (`com.apple.screensaver` `moduleDict`) vào `~/Library/Application Support/com.tcs.wallpaper/lock-screen-backup` trước khi sửa đổi, rollback an toàn khi gỡ wallpaper.
   - Thay thế toàn bộ việc gọi lệnh shell (`/usr/bin/defaults`, `/usr/bin/killall`) bằng API CoreFoundation `CFPreferences` và `NSRunningApplication` + `kill(SIGTERM)`.
