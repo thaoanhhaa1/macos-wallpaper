@@ -4,10 +4,12 @@
 
 # Wallpaper for macOS
 
+Phiên bản phát hành: **v1.1.0 (Build 2)**.
+
 Ứng dụng macOS native dùng video làm hình nền động. Repo hiện có hai phần:
 
 - `WallpaperSpike/` — feasibility spike của Pha 0.
-- `WallpaperApp/` — ứng dụng thật, hiện hoàn thành Pha 1 đến Pha 8.
+- `WallpaperApp/` — ứng dụng thật, hiện hoàn thành Pha 1 đến Pha 8 kèm gói tăng cường an toàn và App Sandbox v1.1.0.
 
 Quyết định kỹ thuật và bảng compatibility nằm trong [`FEASIBILITY.md`](FEASIBILITY.md);
 phạm vi các pha tiếp theo nằm trong [`PLAN.md`](PLAN.md).
@@ -23,18 +25,21 @@ phạm vi các pha tiếp theo nằm trong [`PLAN.md`](PLAN.md).
 ### Build và chạy
 
 ```bash
-./Scripts/build-app.sh    # build Debug, in ra đường dẫn .app
-./Scripts/run-app.sh      # build rồi mở app
+./Scripts/build-app.sh                 # build Debug sandbox, in ra đường dẫn .app
+./Scripts/run-app.sh                   # build rồi mở app
+SANDBOX=0 ./Scripts/run-app.sh         # build không sandbox để thử Lock Screen
 ```
 
 App chạy dạng menu bar utility (`LSUIElement = YES`), không có Dock icon. Lần chạy đầu
 tiên sẽ mở Settings một lần; các lần sau mở lại bằng item **Settings…** trên menu bar.
 
 Bundle identifier: `com.tcs.wallpaper`. Debug dùng ad-hoc signing để phát triển;
-Release bật hardened runtime và được ký bằng Developer ID qua quy trình trong
-[`DISTRIBUTION.md`](DISTRIBUTION.md). App Sandbox tắt cho kênh Developer ID; entitlements
-sandbox đã chuẩn bị trong `WallpaperApp/WallpaperApp-Sandbox.entitlements` cho nhánh
-Mac App Store.
+Release bật hardened runtime, App Sandbox và được ký bằng Developer ID qua quy trình trong
+[`DISTRIBUTION.md`](DISTRIBUTION.md). Bản release sandbox không thực hiện các thao tác đặc
+quyền của tính năng Lock Screen (ghi ngoài container, đổi screensaver preference và gửi
+tín hiệu tới `WallpaperAgent`); tính năng này chỉ khả dụng ở bản build không sandbox dành
+cho phát triển (`SANDBOX=0`). Mô hình đe dọa và lộ trình XPC Helper nằm trong
+[`SECURITY.md`](SECURITY.md).
 
 Build và phân phối release:
 
@@ -237,8 +242,10 @@ launch at login.
 - Diagnostics có thêm trạng thái launch at login, số security-scoped resource đang giữ
   và thông tin phân phối/chữ ký.
 - Release bật hardened runtime, không inject base entitlements và dùng timestamp khi ký.
-- Đã xác định entitlements App Sandbox tối thiểu cho file access:
+- Release dùng App Sandbox với entitlements tối thiểu cho file access:
   `app-sandbox`, `files.user-selected.read-only`, `files.bookmarks.app-scope`.
+  Khi chạy sandbox, tính năng Lock Screen tự vô hiệu hóa vì cần ghi ra ngoài container và
+  điều khiển tiến trình hệ thống.
 - `Resources/PrivacyInfo.xcprivacy` khai báo required-reason API `UserDefaults`; app không
   có telemetry hoặc crash reporting nên không cần privacy policy.
 - Quy trình release Developer ID: build archive, export, notarize + staple app, tạo DMG,
@@ -266,14 +273,54 @@ launch at login.
 - Theo hướng dẫn trong DMG để uninstall; kiểm tra app, login item và preference đã được
   xóa.
 
+### Phiên bản 1.1.0: Tăng cường an toàn, App Sandbox mặc định và Release Gate
+
+Phiên bản 1.1.0 tập trung toàn diện vào bảo mật, kiểm soát phân quyền và quy trình phát hành:
+
+- **App Sandbox kích hoạt mặc định**: Toàn bộ build script (`Scripts/build-app.sh`,
+  `Scripts/build-release.sh`, `Scripts/release.sh`) mặc định đặt `SANDBOX=1`. Bản release
+  bắt buộc phải có entitlement `com.apple.security.app-sandbox`.
+- **Release Policy Gate**: Script `Scripts/check-release-policy.sh` và GitHub Actions
+  `.github/workflows/release-gate.yml` ngăn chặn commit file binary vào git, từ chối release
+  không có sandbox, và kiểm tra tính toàn vẹn của cấu hình build.
+- **Xác thực toàn diện trước phát hành**: `Scripts/verify-release.sh` hỗ trợ kiểm tra cả
+  file `.app` và file đóng gói `.dmg` (mount và kiểm tra bundle bên trong), bảo đảm:
+  chữ ký Developer ID Application, Hardened Runtime, App Sandbox, không có `get-task-allow`,
+  không chứa dylib debug hoặc fixture video.
+- **Xác thực container và giới hạn media**: `MediaContentType` kiểm tra định dạng MIME/UTType
+  hợp lệ (`.mp4`, `.mov`), xác thực chữ ký container qua magic bytes/top-level boxes
+  (`ftyp`, `moov`, `mdat`, `wide`, `free`, `skip`), và áp đặt giới hạn kích thước tệp
+  tối đa 20GB.
+- **Bảo mật thông tin chẩn đoán (Diagnostics Redactor)**: Module `DiagnosticsRedactor`
+  tự động ẩn/làm mờ (redact) tên tệp video và đường dẫn thư mục cá nhân khi người dùng
+  copy thông tin Diagnostics; hệ thống logging chuyển tên tệp sang `privacy: .private`.
+- **An toàn cho tính năng Lock Screen**:
+  - Tự động phát hiện môi trường Sandbox: Ẩn toggle và thông báo trạng thái không khả dụng
+    trên bản release sandbox nhằm tránh crash/lỗi phân quyền vi phạm sandbox.
+  - Cơ chế backup nguyên tử: Tự động sao lưu `Index.plist` và `com.apple.screensaver`
+    `moduleDict` trước khi sửa đổi, rollback an toàn khi người dùng tắt hoặc gỡ bỏ hình nền.
+  - Sử dụng API hệ thống `CFPreferences` và
+    `NSRunningApplication.runningApplications(withBundleIdentifier:)` + `SIGTERM` thay vì
+    gọi lệnh shell trực tiếp (`defaults`, `killall`).
+- **Nâng cấp Security-Scoped Bookmark**: Loại bỏ fallback không an toàn; tự động refresh
+  và nhận biết cờ `needsUpgrade` khi nâng cấp từ bookmark cũ.
+
 ### Đồng bộ Lock Screen (Màn hình khóa)
 
+- **Chỉ khả dụng ở bản build không sandbox dành cho phát triển** (`SANDBOX=0`). Bản release
+  sandbox mặc định không hiển thị toggle và bỏ qua toàn bộ thao tác ghi ngoài container,
+  thay đổi screensaver preference và gửi tín hiệu tới `WallpaperAgent`.
 - Khi **Set for Lock Screen** bật (mặc định), việc apply video sẽ tự động đồng bộ sang màn hình khóa macOS:
   - Video được inject vào hệ thống native aerials screensaver của macOS (`com.apple.wallpaper/aerials` và `Store/Index.plist`).
+  - `Index.plist` và `entries.json` được backup một lần trước khi sửa, lưu trong
+    `~/Library/Application Support/com.tcs.wallpaper/lock-screen-backup`.
+  - Chỉ mục `Idle` (lock screen) của từng display/space được cập nhật; cấu hình
+    `Desktop` và wallpaper riêng của từng màn hình/space được giữ nguyên.
   - Screensaver module được cấu hình dùng `WallpaperAerialsExtension` để lock screen phát video native mượt mà.
   - Snapshot ảnh độ phân giải cao được tạo và cập nhật vào cache màn hình khóa `/Library/Caches/Desktop Pictures/<UUID>/lockscreen.png` và system desktop image via `NSWorkspace`.
   - Khi màn hình khóa kích hoạt (`com.apple.sessionagent.screenIsLocked`), surface window tạm dừng playback để tiết kiệm GPU/CPU và nhường chỗ cho lock screen native. Khi mở khóa, surface window tiếp tục phát ngay lập tức.
-  - Khi người dùng bấm **Remove Wallpaper** hoặc tắt toggle, lock screen được hoàn trả về mặc định.
+  - Khi người dùng bấm **Remove Wallpaper** hoặc tắt toggle, lock screen được khôi phục
+    từ backup thay vì reset toàn bộ wallpaper về mặc định.
 
 ### Kiểm tra playback thủ công
 

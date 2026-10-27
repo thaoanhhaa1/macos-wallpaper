@@ -68,31 +68,48 @@ struct WallpaperCard: View {
 
                 Divider()
 
-                HStack(alignment: .center) {
-                    Toggle(isOn: Binding(
-                        get: { model.settings.syncLockScreen },
-                        set: { model.settings.syncLockScreen = $0 }
-                    )) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Set for Lock Screen")
-                                .fontWeight(.medium)
-                            Text("Synchronizes the wallpaper video with the macOS Lock Screen.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                if model.isLockScreenSyncAvailable {
+                    HStack(alignment: .center) {
+                        Toggle(isOn: Binding(
+                            get: { model.settings.syncLockScreen },
+                            set: { model.settings.syncLockScreen = $0 }
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Set for Lock Screen")
+                                    .fontWeight(.medium)
+                                Text("Synchronizes the wallpaper video with the macOS Lock Screen.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        Spacer()
+
+                        if model.lockScreen.isSynced {
+                            Label("LOCK SCREEN READY", systemImage: "lock.fill")
+                                .font(.caption2.weight(.bold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.accentColor.opacity(0.16))
+                                .foregroundStyle(Color.accentColor)
+                                .clipShape(Capsule())
                         }
                     }
+                } else {
+                    Label(
+                        "Lock Screen sync is unavailable in sandboxed builds.",
+                        systemImage: "lock.slash"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
 
-                    Spacer()
-
-                    if model.lockScreen.isSynced {
-                        Label("LOCK SCREEN READY", systemImage: "lock.fill")
-                            .font(.caption2.weight(.bold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.accentColor.opacity(0.16))
-                            .foregroundStyle(Color.accentColor)
-                            .clipShape(Capsule())
-                    }
+                if let warning = model.lockScreen.recoveryWarning {
+                    Label(warning, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .padding(6)

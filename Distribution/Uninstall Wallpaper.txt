@@ -5,7 +5,8 @@ Uninstall Wallpaper
 2. Drag WallpaperApp.app from Applications to the Trash.
 3. Open System Settings > General > Login Items and remove Wallpaper if it is listed.
 4. Optional: remove saved settings and security-scoped bookmarks:
-   - Non-sandboxed build: defaults delete com.tcs.wallpaper
-   - Sandboxed build:  rm -rf ~/Library/Containers/com.tcs.wallpaper
+   - Sandboxed release (default): rm -rf ~/Library/Containers/com.tcs.wallpaper
+   - Unsandboxed development:    defaults delete com.tcs.wallpaper
 
-Wallpaper does not create files outside its app container or preferences domain.
+The sandboxed release does not write outside its app container. Unsandboxed development
+builds with Lock Screen sync enabled may update macOS wallpaper files.

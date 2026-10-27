@@ -2,6 +2,7 @@ import Foundation
 
 enum MediaBookmarkError: LocalizedError, Equatable {
     case emptyBookmark(String)
+    case creationFailed(String)
     case resolveFailed(String)
     case missingFile(String)
     case permissionDenied(String)
@@ -10,6 +11,8 @@ enum MediaBookmarkError: LocalizedError, Equatable {
         switch self {
         case .emptyBookmark(let name):
             "The saved bookmark for “\(name)” is unavailable. Relink the video to restore the wallpaper."
+        case .creationFailed(let name):
+            "A security-scoped bookmark for “\(name)” couldn't be created. Choose the video again to grant access."
         case .resolveFailed(let name):
             "The saved bookmark for “\(name)” can't be resolved. Relink the video to restore the wallpaper."
         case .missingFile(let name):
@@ -59,18 +62,10 @@ enum MediaBookmark {
                 relativeTo: nil
             )
         } catch {
-            do {
-                return try url.bookmarkData(
-                    options: [],
-                    includingResourceValuesForKeys: nil,
-                    relativeTo: nil
-                )
-            } catch {
-                Log.persistence.error(
-                    "Failed to create bookmark for \(url.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)"
-                )
-                throw MediaBookmarkError.resolveFailed(url.lastPathComponent)
-            }
+            Log.persistence.error(
+                "Failed to create security-scoped bookmark for \(url.lastPathComponent, privacy: .private): \(error.localizedDescription, privacy: .public)"
+            )
+            throw MediaBookmarkError.creationFailed(url.lastPathComponent)
         }
     }
 
@@ -80,6 +75,7 @@ enum MediaBookmark {
         }
 
         var isStale = false
+        var needsUpgrade = false
         let url: URL
         do {
             url = try URL(
@@ -99,9 +95,10 @@ enum MediaBookmark {
                     relativeTo: nil,
                     bookmarkDataIsStale: &isStale
                 )
+                needsUpgrade = true
             } catch {
                 Log.persistence.error(
-                    "Failed to resolve bookmark for \(reference.displayName, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                    "Failed to resolve bookmark for \(reference.displayName, privacy: .private): \(error.localizedDescription, privacy: .public)"
                 )
                 if Self.isMissingFileError(error) {
                     throw MediaBookmarkError.missingFile(reference.displayName)
@@ -115,7 +112,7 @@ enum MediaBookmark {
         guard FileManager.default.fileExists(atPath: url.path) else {
             resource.stopAccessing()
             Log.persistence.error(
-                "Bookmark resolved to a missing file: \(reference.displayName, privacy: .public)"
+                "Bookmark resolved to a missing file: \(reference.displayName, privacy: .private)"
             )
             throw MediaBookmarkError.missingFile(reference.displayName)
         }
@@ -123,24 +120,29 @@ enum MediaBookmark {
         guard FileManager.default.isReadableFile(atPath: url.path) else {
             resource.stopAccessing()
             Log.persistence.error(
-                "Bookmark resolved to an unreadable file: \(reference.displayName, privacy: .public)"
+                "Bookmark resolved to an unreadable file: \(reference.displayName, privacy: .private)"
             )
             throw MediaBookmarkError.permissionDenied(reference.displayName)
         }
 
         var updated = reference
-        if isStale, let refreshed = try? makeBookmarkData(for: url) {
-            updated.bookmarkData = refreshed
+        if isStale || needsUpgrade {
+            do {
+                updated.bookmarkData = try makeBookmarkData(for: url)
+            } catch {
+                resource.stopAccessing()
+                throw error
+            }
             Log.persistence.notice(
-                "Refreshed stale bookmark for \(reference.displayName, privacy: .public)"
+                "Refreshed bookmark for \(reference.displayName, privacy: .private) stale=\(isStale, privacy: .public) upgraded=\(needsUpgrade, privacy: .public)"
             )
         }
 
         Log.persistence.info(
-            "Resolved bookmark for \(reference.displayName, privacy: .public) stale=\(isStale, privacy: .public) securityScoped=\(resource.didStartAccessing, privacy: .public)"
+            "Resolved bookmark for \(reference.displayName, privacy: .private) stale=\(isStale, privacy: .public) upgraded=\(needsUpgrade, privacy: .public) securityScoped=\(resource.didStartAccessing, privacy: .public)"
         )
 
-        return ResolvedMedia(reference: updated, resource: resource, wasStale: isStale)
+        return ResolvedMedia(reference: updated, resource: resource, wasStale: isStale || needsUpgrade)
     }
 
     private static func isMissingFileError(_ error: Error) -> Bool {

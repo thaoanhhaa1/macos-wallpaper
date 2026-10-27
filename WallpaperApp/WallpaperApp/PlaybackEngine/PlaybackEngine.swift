@@ -99,7 +99,7 @@ final class PlaybackEngine {
         }
 
         Log.playback.notice(
-            "Loaded \(url.lastPathComponent, privacy: .public) duration=\(self.duration, privacy: .public) loop=\(settings.loopEnabled, privacy: .public) autoplay=\(autoplay, privacy: .public)"
+            "Loaded \(url.lastPathComponent, privacy: .private) duration=\(self.duration, privacy: .public) loop=\(settings.loopEnabled, privacy: .public) autoplay=\(autoplay, privacy: .public)"
         )
     }
 

@@ -11,6 +11,8 @@ if [[ -z "$APP" || ! -d "$APP" ]]; then
   exit 1
 fi
 
+"$ROOT/Scripts/verify-release.sh" "$APP"
+
 rm -rf "$STAGE" "$DMG"
 mkdir -p "$STAGE"
 

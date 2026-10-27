@@ -6,7 +6,7 @@ ARCHIVE="$ROOT/Build/WallpaperApp.xcarchive"
 EXPORT_DIR="$ROOT/Build/ReleaseExport"
 TEAM_ID="${DEVELOPMENT_TEAM:-}"
 SIGN_IDENTITY="${DEVELOPER_ID_APPLICATION:-Developer ID Application}"
-SANDBOX="${SANDBOX:-0}"
+SANDBOX="${SANDBOX:-1}"
 
 if [[ -z "$TEAM_ID" ]]; then
   echo "DEVELOPMENT_TEAM is required, for example:" >&2
@@ -18,7 +18,7 @@ rm -rf "$ARCHIVE" "$EXPORT_DIR"
 mkdir -p "$EXPORT_DIR"
 
 export_options="$EXPORT_DIR/ExportOptions.plist"
-cat > "$export_options" <<PLIST
+cat > "$export_options" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -28,24 +28,38 @@ cat > "$export_options" <<PLIST
 	<key>signingStyle</key>
 	<string>manual</string>
 	<key>signingCertificate</key>
-	<string>$SIGN_IDENTITY</string>
+	<string></string>
 	<key>teamID</key>
-	<string>$TEAM_ID</string>
+	<string></string>
 	<key>destination</key>
 	<string>export</string>
 </dict>
 </plist>
 PLIST
 
-sandbox_settings=(
-  "ENABLE_APP_SANDBOX=NO"
-)
-if [[ "$SANDBOX" == "1" ]]; then
-  sandbox_settings=(
-    "ENABLE_APP_SANDBOX=YES"
-    "CODE_SIGN_ENTITLEMENTS=WallpaperApp/WallpaperApp-Sandbox.entitlements"
-  )
-fi
+plutil -replace signingCertificate -string "$SIGN_IDENTITY" "$export_options"
+plutil -replace teamID -string "$TEAM_ID" "$export_options"
+
+case "$SANDBOX" in
+  0)
+    echo "WARNING: building an unsandboxed release for local development only." >&2
+    echo "Unsandboxed artifacts are rejected by Scripts/verify-release.sh." >&2
+    sandbox_settings=(
+      "ENABLE_APP_SANDBOX=NO"
+      "CODE_SIGN_ENTITLEMENTS="
+    )
+    ;;
+  1)
+    sandbox_settings=(
+      "ENABLE_APP_SANDBOX=YES"
+      "CODE_SIGN_ENTITLEMENTS=WallpaperApp-Sandbox.entitlements"
+    )
+    ;;
+  *)
+    echo "SANDBOX must be 0 or 1." >&2
+    exit 1
+    ;;
+esac
 
 xcodebuild archive \
   -project "$ROOT/WallpaperApp/WallpaperApp.xcodeproj" \

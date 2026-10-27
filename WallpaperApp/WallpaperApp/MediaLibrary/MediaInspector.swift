@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreMedia
 import Foundation
+import UniformTypeIdentifiers
 
 struct MediaMetadata: Equatable {
     var duration: TimeInterval
@@ -40,6 +41,9 @@ struct MediaMetadata: Equatable {
 enum MediaImportError: LocalizedError, Equatable {
     case fileMissing
     case fileUnreadable
+    case unsupportedContentType
+    case fileTooLarge(Int64)
+    case invalidFileSignature
     case notPlayable
     case noVideoTrack
     case bookmarkCreationFailed(String)
@@ -51,6 +55,12 @@ enum MediaImportError: LocalizedError, Equatable {
             "The selected file no longer exists."
         case .fileUnreadable:
             "The app doesn't have permission to read this file. Choose it again with Choose Video… to grant access."
+        case .unsupportedContentType:
+            "This file isn't an \(MediaContentType.supportedFormatsDescription). Choose an MP4 or MOV video."
+        case .fileTooLarge(let limit):
+            "This video exceeds the \(ByteCountFormatter.string(fromByteCount: limit, countStyle: .file)) limit. Choose a smaller MP4 or MOV video."
+        case .invalidFileSignature:
+            "This file isn't a valid MP4 or MOV container. Choose a video exported in a supported format."
         case .notPlayable:
             "This video format or codec isn't supported. Try H.264 or HEVC video in an MP4 or MOV file."
         case .noVideoTrack:
@@ -72,6 +82,7 @@ enum MediaInspector {
         guard fileManager.isReadableFile(atPath: url.path) else {
             throw MediaImportError.fileUnreadable
         }
+        try MediaContentType.validate(url: url)
 
         do {
             let asset = AVURLAsset(url: url)

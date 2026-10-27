@@ -149,6 +149,7 @@ struct SurfaceDiagnosticsView: View {
                 model.copyDiagnostics()
             }
             .controlSize(.small)
+            .help("Copies a diagnostics report with media file names redacted.")
         }
     }
 }

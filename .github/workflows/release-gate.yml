@@ -1,0 +1,36 @@
+name: Release gate
+
+on:
+  pull_request:
+    branches:
+      - main
+      - "release/**"
+  push:
+    branches:
+      - main
+      - "release/**"
+  workflow_dispatch:
+    inputs:
+      artifact:
+        description: Path to a notarized .app or .dmg already present on the runner
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  release-gate:
+    runs-on: macos-14
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Enforce sandbox and release policy
+        run: ./Scripts/check-release-policy.sh
+
+      - name: Verify release artifact
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.artifact != '' }}
+        env:
+          RELEASE_ARTIFACT: ${{ inputs.artifact }}
+        run: ./Scripts/verify-release.sh "$RELEASE_ARTIFACT"

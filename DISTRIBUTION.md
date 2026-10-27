@@ -6,10 +6,15 @@ cuối tài liệu.
 
 ## Kênh phân phối đã chọn
 
+- Phiên bản phát hành: **1.1.0 (Build 2)**.
 - Phân phối trực tiếp bằng **Developer ID Application** + **notarization**.
-- Release bật **Hardened Runtime**; Debug vẫn dùng ad-hoc signing để phát triển.
-- App Sandbox tắt cho bản Developer ID vì không bắt buộc ngoài App Store.
-- Entitlements cho App Sandbox đã được chuẩn bị sẵn cho nhánh Mac App Store.
+- Release bật **Hardened Runtime** và **App Sandbox** (`SANDBOX=1` mặc định); Debug dùng ad-hoc signing để phát triển.
+- Entitlements App Sandbox tối thiểu nằm trong
+  `WallpaperApp/WallpaperApp-Sandbox.entitlements`.
+- Bản release sandbox không thực hiện các thao tác đặc quyền của tính năng Lock Screen
+  (ghi ngoài container, đổi screensaver preference, điều khiển `WallpaperAgent`); tính
+  năng này cần build không sandbox dành cho phát triển (`SANDBOX=0`). Xem
+  [`SECURITY.md`](SECURITY.md) để biết mô hình đe dọa và lộ trình XPC Helper.
 
 ## Yêu cầu
 
@@ -30,21 +35,36 @@ Có thể đổi tên profile bằng biến môi trường `NOTARY_PROFILE`.
 ## Quy trình release
 
 ```bash
+# 0. Kiểm tra tuân thủ chính sách release
+./Scripts/check-release-policy.sh
+
+# 1. Chạy quy trình release đầy đủ
 DEVELOPMENT_TEAM=ABCDE12345 ./Scripts/release.sh
 ```
 
 Script thực hiện:
 
-1. `Scripts/build-release.sh` — archive cấu hình Release, ký bằng Developer ID,
-   bật hardened runtime, thêm timestamp và export app.
-2. `Scripts/notarize.sh` — zip app, gửi notarization, chờ kết quả, staple app.
-3. `Scripts/create-dmg.sh` — tạo DMG có app, shortcut Applications và file hướng dẫn
-   uninstall.
-4. Notarize và staple DMG.
-5. `Scripts/verify-release.sh` — kiểm tra staple, chữ ký, hardened runtime và
-   Gatekeeper.
+1. `Scripts/check-release-policy.sh` — xác minh không commit nhầm file build/artifact,
+   bắt buộc script build có `SANDBOX=1`, và entitlements kích hoạt sandbox.
+2. `Scripts/build-release.sh` — archive cấu hình Release với App Sandbox (`SANDBOX=1`),
+   ký bằng Developer ID, bật hardened runtime, thêm timestamp và export app.
+3. `Scripts/notarize.sh` — zip app, gửi notarization, chờ kết quả, staple app.
+4. `Scripts/create-dmg.sh` — chạy `Scripts/verify-release.sh` trên app trước khi đóng
+   gói (từ chối app ad-hoc, thiếu sandbox, còn `get-task-allow` hoặc chứa fixture Debug),
+   rồi tạo DMG có app, shortcut Applications và file hướng dẫn uninstall.
+5. Notarize và staple DMG.
+6. `Scripts/verify-release.sh` — kiểm tra staple, chữ ký Developer ID Application,
+   hardened runtime, sandbox entitlement, cấm `get-task-allow`, kiểm tra Gatekeeper
+   trên cả `.app` và `.dmg` (mount và quét bundle bên trong).
 
 Artifact cuối cùng: `Build/Wallpaper.dmg`.
+
+### Release Gate CI
+
+GitHub Actions workflow `.github/workflows/release-gate.yml` tự động chạy
+`./Scripts/check-release-policy.sh` trên môi trường `macos-latest` mỗi khi push hoặc mở PR
+vào nhánh `master` / `main`, ngăn chặn việc phát hành hoặc hợp nhất mã nguồn vi phạm chính
+sách bảo mật.
 
 ### Biến môi trường
 
@@ -53,12 +73,41 @@ Artifact cuối cùng: `Build/Wallpaper.dmg`.
 | `DEVELOPMENT_TEAM` | bắt buộc | Team ID của Apple Developer |
 | `DEVELOPER_ID_APPLICATION` | `Developer ID Application` | Tên identity dùng để ký |
 | `NOTARY_PROFILE` | `wallpaper-notary` | Keychain profile của notarytool |
-| `SANDBOX` | `0` | Đặt `1` để build thử bản có App Sandbox |
+| `SANDBOX` | `1` | Đặt `0` để build không sandbox cho phát triển local |
 
-Build release có sandbox để đánh giá:
+Build release chuẩn (sandbox):
 
 ```bash
-DEVELOPMENT_TEAM=ABCDE12345 SANDBOX=1 ./Scripts/build-release.sh
+DEVELOPMENT_TEAM=ABCDE12345 ./Scripts/release.sh
+```
+
+Chỉ dùng build không sandbox để thử tính năng Lock Screen; `Scripts/release.sh` và
+`Scripts/verify-release.sh` từ chối artifact này nên không thể phát hành nhầm:
+
+```bash
+DEVELOPMENT_TEAM=ABCDE12345 SANDBOX=0 ./Scripts/build-release.sh
+```
+
+### Đóng gói DMG để test local (Không cần chứng chỉ Developer ID trả phí)
+
+Nếu chỉ muốn build và đóng gói nhanh thành file `.dmg` để thử nghiệm trên máy cá nhân mà không cần tài khoản Apple Developer trả phí hay Notarization:
+
+```bash
+# 1. Build bản debug cục bộ
+./Scripts/build-app.sh
+
+# 2. Chuẩn bị staging và đóng gói file DMG
+rm -rf Build/DMGStage Build/Wallpaper-Local.dmg
+mkdir -p Build/DMGStage
+ditto Build/AppDerivedData/Build/Products/Debug/WallpaperApp.app Build/DMGStage/WallpaperApp.app
+ln -s /Applications Build/DMGStage/Applications
+
+# 3. Tạo DMG (dùng diskutil trên macOS mới hoặc fallback hdiutil)
+if diskutil image create --help &>/dev/null; then
+  diskutil image create from --format UDZO --volumeName "Wallpaper" Build/DMGStage Build/Wallpaper-Local.dmg
+else
+  hdiutil create -volname "Wallpaper" -srcfolder Build/DMGStage -ov -format UDZO Build/Wallpaper-Local.dmg
+fi
 ```
 
 ## Kiểm tra thủ công sau release
@@ -106,8 +155,8 @@ Kiểm tra trên máy sạch (hoặc tài khoản macOS mới):
   media hoặc terminate, `stopAccessingSecurityScopedResource()` được gọi.
 - Diagnostics hiển thị `securityScopedResources` để kiểm tra không có resource bị giữ
   ngoài ý muốn.
-- Khi chuyển sang bản sandbox, cần entitlement `com.apple.security.files.bookmarks.app-scope`
-  để bookmark còn hiệu lực sau khi khởi động lại.
+- Entitlement `com.apple.security.files.bookmarks.app-scope` cho phép bookmark còn hiệu lực
+  sau khi khởi động lại trong sandbox.
 
 ## Đánh giá Mac App Store
 
@@ -121,6 +170,11 @@ Entitlements tối thiểu nằm trong `WallpaperApp/WallpaperApp-Sandbox.entitl
 
 Các điểm cần đánh giá trước khi chọn Mac App Store:
 
+- **Lock Screen**: đồng bộ màn hình khóa cần ghi vào
+  `~/Library/Application Support/com.apple.wallpaper`, đổi screensaver preference và
+  điều khiển `WallpaperAgent`; các thao tác này bị App Sandbox chặn. Bản release sandbox
+  tự vô hiệu hóa tính năng; muốn giữ tính năng phải tách thành helper/XPC đặc quyền có
+  authorization (xem [`SECURITY.md`](SECURITY.md)).
 - **Cửa sổ desktop-level**: app dùng `NSWindow` công khai ở level
   `desktopIconWindow − 1`. Cần kiểm tra lại sau mỗi bản macOS lớn vì thứ tự window
   và desktop icons là hành vi của hệ thống, không phải API hợp đồng.
@@ -154,8 +208,8 @@ Hướng dẫn có trong DMG và trong `Distribution/Uninstall Wallpaper.txt`:
 2. Xóa `WallpaperApp.app` khỏi Applications.
 3. Xóa login item trong System Settings → General → Login Items nếu còn.
 4. Tùy chọn xóa cấu hình:
-   - bản không sandbox: `defaults delete com.tcs.wallpaper`
-   - bản sandbox: `rm -rf ~/Library/Containers/com.tcs.wallpaper`
+   - bản release sandbox: `rm -rf ~/Library/Containers/com.tcs.wallpaper`
+   - bản phát triển không sandbox: `defaults delete com.tcs.wallpaper`
 
 ## Troubleshooting
 

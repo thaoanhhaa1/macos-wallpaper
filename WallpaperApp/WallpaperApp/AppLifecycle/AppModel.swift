@@ -78,6 +78,12 @@ final class AppModel {
         diagnostics = AppDiagnostics.snapshot()
         distributionInfo = DistributionInfo.snapshot()
 
+        if !lockScreen.isSupported, settings.syncLockScreen {
+            var sanitized = settings
+            sanitized.syncLockScreen = false
+            settings = sanitized
+        }
+
         if let issue = settings.wallpaper.restoreIssue {
             missingWallpaper = MissingWallpaper(issue: issue)
         }
@@ -145,6 +151,7 @@ final class AppModel {
     var launchAtLoginError: String? { launchAtLogin.lastError }
     var launchAtLoginRequiresApproval: Bool { launchAtLogin.requiresApproval }
     var activeSecurityScopedResourceCount: Int { mediaCache.count }
+    var isLockScreenSyncAvailable: Bool { lockScreen.isSupported }
 
     var isWaitingForDisplay: Bool {
         settings.wallpaper.active != nil
@@ -290,7 +297,7 @@ final class AppModel {
 
     func openVideo(at url: URL) async {
         importState = .importing
-        Log.media.notice("Import started for \(url.lastPathComponent, privacy: .public)")
+        Log.media.notice("Import started for \(url.lastPathComponent, privacy: .private)")
 
         do {
             let imported = try await importer.importVideo(at: url)
@@ -312,12 +319,12 @@ final class AppModel {
             recordRecentMedia(media)
             stopUnusedMedia(keeping: wallpaper.appliedMediaIdentifiers)
             Log.media.notice(
-                "Import ready for \(media.displayName, privacy: .public) duration=\(selection.metadata.duration, privacy: .public)"
+                "Import ready for \(media.displayName, privacy: .private) duration=\(selection.metadata.duration, privacy: .public)"
             )
         } catch {
             importState = .failed(error.localizedDescription)
             Log.media.error(
-                "Import failed for \(url.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                "Import failed for \(url.lastPathComponent, privacy: .private): \(error.localizedDescription, privacy: .public)"
             )
         }
     }
@@ -328,13 +335,20 @@ final class AppModel {
             Log.media.error("Rejected non-file drop")
             return
         }
+        do {
+            try MediaImporter.validateContentType(of: url)
+        } catch {
+            importState = .failed(error.localizedDescription)
+            Log.media.error("Rejected unsupported drop type: \(error.localizedDescription, privacy: .public)")
+            return
+        }
         await openVideo(at: url)
     }
 
     func openRecentVideo(_ reference: MediaReference) async {
         guard importState != .importing else { return }
         importState = .importing
-        Log.media.notice("Opening recent video \(reference.displayName, privacy: .public)")
+        Log.media.notice("Opening recent video \(reference.displayName, privacy: .private)")
 
         do {
             let selection = try await activateMedia(reference: reference)
@@ -352,12 +366,12 @@ final class AppModel {
             recordRecentMedia(media)
             stopUnusedMedia(keeping: wallpaper.appliedMediaIdentifiers)
             Log.media.notice(
-                "Recent video ready for \(media.displayName, privacy: .public) duration=\(selection.metadata.duration, privacy: .public)"
+                "Recent video ready for \(media.displayName, privacy: .private) duration=\(selection.metadata.duration, privacy: .public)"
             )
         } catch {
             importState = .failed(error.localizedDescription)
             Log.media.error(
-                "Recent video failed for \(reference.displayName, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                "Recent video failed for \(reference.displayName, privacy: .private): \(error.localizedDescription, privacy: .public)"
             )
         }
     }
@@ -367,7 +381,7 @@ final class AppModel {
             return
         }
         settings.recentMedia.removeAll { $0.identifier == reference.identifier }
-        Log.media.notice("Removed recent video \(reference.displayName, privacy: .public)")
+        Log.media.notice("Removed recent video \(reference.displayName, privacy: .private)")
     }
 
     func relinkMissingVideo() async {
@@ -379,7 +393,7 @@ final class AppModel {
     func relinkMissingVideo(at url: URL, issue: MissingWallpaper) async {
         importState = .importing
         Log.persistence.notice(
-            "Relinking missing wallpaper \(issue.displayName, privacy: .public) with \(url.lastPathComponent, privacy: .public)"
+            "Relinking missing wallpaper \(issue.displayName, privacy: .private) with \(url.lastPathComponent, privacy: .private)"
         )
 
         do {
@@ -449,7 +463,7 @@ final class AppModel {
                 importState = .idle
                 recordRecentMedia(media)
                 Log.persistence.notice(
-                    "Relinked wallpaper \(media.displayName, privacy: .public)"
+                    "Relinked wallpaper \(media.displayName, privacy: .private)"
                 )
             } catch {
                 rollbackSettings(to: previous, reason: "Relink rollback")
@@ -458,7 +472,7 @@ final class AppModel {
         } catch {
             importState = .failed(error.localizedDescription)
             Log.persistence.error(
-                "Relink failed for \(issue.displayName, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                "Relink failed for \(issue.displayName, privacy: .private): \(error.localizedDescription, privacy: .public)"
             )
         }
     }
@@ -660,7 +674,7 @@ final class AppModel {
             settings.wallpaper.restoreIssue = nil
             missingWallpaper = nil
             Log.surface.notice(
-                "Applied wallpaper \(cached.reference.displayName, privacy: .public) mode=\(mode.rawValue, privacy: .public)"
+                "Applied wallpaper \(cached.reference.displayName, privacy: .private) mode=\(mode.rawValue, privacy: .public)"
             )
 
             if settings.syncLockScreen {
@@ -674,7 +688,7 @@ final class AppModel {
         } catch {
             rollbackSettings(to: previous, reason: "Apply rollback")
             Log.surface.error(
-                "Apply failed for \(reference.displayName, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                "Apply failed for \(reference.displayName, privacy: .private): \(error.localizedDescription, privacy: .public)"
             )
         }
     }
@@ -717,7 +731,7 @@ final class AppModel {
 
     func revealDevelopmentFixture() {
         guard let url = developmentFixtureURL else { return }
-        Log.media.notice("Revealing development fixture \(url.lastPathComponent, privacy: .public)")
+        Log.media.notice("Revealing development fixture \(url.lastPathComponent, privacy: .private)")
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
@@ -741,23 +755,25 @@ final class AppModel {
                 let mirror = display.isMirrored
                     ? " mirroredWith=\(display.mirrorsDisplayID.map(String.init) ?? "unknown")"
                     : ""
-                return "\(display.name) id=\(display.persistentID) \(display.summary) main=\(display.isMain) builtIn=\(display.isBuiltIn)\(mirror) assigned=\(config?.assignment.media.displayName ?? "none") surface=\(surface)"
+                let mediaName = DiagnosticsRedactor.mediaName(config?.assignment.media.displayName)
+                return "\(display.name) id=\(display.persistentID) \(display.summary) main=\(display.isMain) builtIn=\(display.isBuiltIn)\(mirror) assigned=\(mediaName) surface=\(surface)"
             }
             .joined(separator: "\n")
 
         let disconnectedSummary = disconnectedDisplayConfigurations
             .map { entry in
-                "\(entry.configuration.displayName) id=\(entry.persistentID) assigned=\(entry.configuration.assignment.media.displayName)"
+                let mediaName = DiagnosticsRedactor.mediaName(entry.configuration.assignment.media.displayName)
+                return "\(entry.configuration.displayName) id=\(entry.persistentID) assigned=\(mediaName)"
             }
             .joined(separator: "\n")
 
         let mediaSummary = selectedMedia.map {
-            "\($0.displayName) (\(mediaMetadata?.summary ?? "metadata unavailable"))"
+            "\(DiagnosticsRedactor.mediaName($0.displayName)) (\(mediaMetadata?.summary ?? "metadata unavailable"))"
         } ?? "none"
 
         let persistenceSummary = """
-        active=\(settings.wallpaper.active?.media.displayName ?? "none")
-        last=\(settings.wallpaper.last?.media.displayName ?? "none")
+        active=\(DiagnosticsRedactor.mediaName(settings.wallpaper.active?.media.displayName))
+        last=\(DiagnosticsRedactor.mediaName(settings.wallpaper.last?.media.displayName))
         restoreIssue=\(missingWallpaper?.reason ?? "none")
         bookmarkBytes=\(selectedMedia?.bookmarkData.count ?? 0)
         displayMode=\(settings.displayMode.rawValue)
@@ -793,7 +809,8 @@ final class AppModel {
         Media: \(mediaSummary)
         Playback: \(playbackState.title)
         Wallpaper: \(wallpaper.state.title) surfaces=\(wallpaper.surfaceCount) players=\(wallpaper.playerCount) paused=\(wallpaper.isPaused)
-        Wallpaper media: \(wallpaper.appliedMediaName ?? "none")
+        Wallpaper media: \(DiagnosticsRedactor.mediaName(wallpaper.appliedMediaName))
+        Media names: redacted
         Persistence:
         \(persistenceSummary)
         Surface windows: \(wallpaper.surfaceWindowNumbers.map(String.init).joined(separator: ", "))
@@ -1104,7 +1121,7 @@ final class AppModel {
 
         var updated = assignment
         Log.persistence.notice(
-            "\(reason, privacy: .public): resolving \(assignment.media.displayName, privacy: .public) mode=\(assignment.displayMode.rawValue, privacy: .public)"
+            "\(reason, privacy: .public): resolving \(assignment.media.displayName, privacy: .private) mode=\(assignment.displayMode.rawValue, privacy: .public)"
         )
 
         do {
@@ -1149,7 +1166,7 @@ final class AppModel {
             settings.wallpaper.restoreIssue = nil
             missingWallpaper = nil
             Log.persistence.notice(
-                "\(reason, privacy: .public) succeeded for \(updated.media.displayName, privacy: .public)"
+                "\(reason, privacy: .public) succeeded for \(updated.media.displayName, privacy: .private)"
             )
 
             if settings.syncLockScreen {
@@ -1310,7 +1327,7 @@ final class AppModel {
         missingWallpaper = MissingWallpaper(issue: issue)
 
         Log.persistence.error(
-            "Restore failed for \(assignment.media.displayName, privacy: .public): \(reason, privacy: .public). Waiting for relink."
+            "Restore failed for \(assignment.media.displayName, privacy: .private): \(reason, privacy: .public). Waiting for relink."
         )
     }
 

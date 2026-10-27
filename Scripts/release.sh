@@ -11,6 +11,12 @@ if [[ "$MODE" != "developer-id" ]]; then
   exit 1
 fi
 
+if [[ "${SANDBOX:-1}" == "0" ]]; then
+  echo "Refusing to release an unsandboxed build." >&2
+  echo "Use Scripts/build-release.sh with SANDBOX=0 only for local development." >&2
+  exit 1
+fi
+
 if [[ -z "$TEAM_ID" ]]; then
   echo "DEVELOPMENT_TEAM is required, for example:" >&2
   echo "  DEVELOPMENT_TEAM=ABCDE12345 ./Scripts/release.sh" >&2
